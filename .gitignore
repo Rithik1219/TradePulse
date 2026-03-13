@@ -25,6 +25,10 @@ Thumbs.db
 # Jupyter
 .ipynb_checkpoints/
 
+# Environment variables
+.env
+.env.*
+
 # pytest / coverage
 .pytest_cache/
 .coverage
