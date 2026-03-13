@@ -191,7 +191,9 @@ def generate_oof_predictions(
 
         # ---- XGBoost ------------------------------------------------------
         xgb = XGBEngine(random_state=RANDOM_SEED)
-        xgb.fit(tab_train_pca, y_train_fold)
+        # Pass the explicit validation fold so no additional rows are carved
+        # out of the training split for early-stopping purposes.
+        xgb.fit(tab_train_pca, y_train_fold, tab_val_pca, y_val_fold)
         oof_xgb[val_idx] = xgb.predict_proba(tab_val_pca)
 
         # ---- LSTM ---------------------------------------------------------
@@ -207,7 +209,11 @@ def generate_oof_predictions(
         lstm.fit(seq_train, y_train_fold, seq_val, y_val_fold)
         oof_lstm[val_idx] = lstm.predict_proba(seq_val)
 
-    return oof_lstm, oof_xgb, last_preprocessor  # type: ignore[return-value]
+    # The loop must execute at least once, so last_preprocessor is always set.
+    assert last_preprocessor is not None, (
+        "generate_oof_predictions requires n_splits >= 1."
+    )
+    return oof_lstm, oof_xgb, last_preprocessor
 
 
 # ---------------------------------------------------------------------------

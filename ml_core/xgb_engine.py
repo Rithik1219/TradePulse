@@ -154,7 +154,10 @@ class XGBEngine:
         """
         self.model_ = self._build_model()
 
-        # If no explicit validation set provided, carve out 10 %
+        # If no explicit validation set provided, carve out the last 10 %.
+        # For time-series data this is chronologically the most recent
+        # observations, which is appropriate.  For randomly-ordered tabular
+        # data you should provide an explicit *X_val* / *y_val* split.
         if X_val is None or y_val is None:
             n_val = max(1, int(0.1 * len(X_train)))
             X_val = X_train[-n_val:]
