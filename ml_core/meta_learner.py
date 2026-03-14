@@ -29,6 +29,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
+import joblib
 import numpy as np
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
@@ -166,6 +167,42 @@ class MetaLearner:
         """
         probs = self.predict_proba(lstm_probs, xgb_probs)
         return (probs >= threshold).astype(int)
+
+    # ------------------------------------------------------------------
+    # Persistence
+    # ------------------------------------------------------------------
+
+    def save(self, path: str) -> None:
+        """Persist the fitted MetaLearner to disk using joblib.
+
+        Parameters
+        ----------
+        path : str
+            File path (e.g. ``"saved_models/meta_learner.joblib"``).
+        """
+        if self.model_ is None or self.scaler_ is None:
+            raise RuntimeError("Cannot save an unfitted MetaLearner.")
+        joblib.dump(self, path)
+        logger.info("MetaLearner saved to %s", path)
+
+    @classmethod
+    def load(cls, path: str) -> "MetaLearner":
+        """Load a previously saved ``MetaLearner`` from disk.
+
+        Parameters
+        ----------
+        path : str
+            File path previously passed to :meth:`save`.
+
+        Returns
+        -------
+        MetaLearner
+        """
+        obj = joblib.load(path)
+        if not isinstance(obj, cls):
+            raise TypeError(f"Expected a MetaLearner, got {type(obj)}.")
+        logger.info("MetaLearner loaded from %s", path)
+        return obj
 
     # ------------------------------------------------------------------
     # Internal helpers

@@ -35,6 +35,7 @@ Usage
 from __future__ import annotations
 
 import logging
+import os
 import sys
 
 import numpy as np
@@ -70,6 +71,10 @@ OHLCV_FEATURES: int = 6        # OHLCV (5) + sentiment score (1)
 TEST_SIZE: int = 200           # Hold-out test-set size
 N_CV_SPLITS: int = 5           # TimeSeriesSplit folds for OOF generation
 PCA_VARIANCE: float = 0.95     # Variance threshold for PCA
+SAVED_MODELS_DIR: str = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "saved_models",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -324,7 +329,19 @@ def run_training_pipeline() -> None:
     logger.info("  Log-Loss  : %.4f", ll)
     logger.info("  Accuracy  : %.4f", accuracy)
     logger.info("=" * 60)
-    logger.info("Training pipeline complete.")
+
+    # -----------------------------------------------------------------------
+    # 7. Save trained artifacts to disk
+    # -----------------------------------------------------------------------
+    logger.info("Saving trained artifacts to %s …", SAVED_MODELS_DIR)
+    os.makedirs(SAVED_MODELS_DIR, exist_ok=True)
+
+    preprocessor.save(os.path.join(SAVED_MODELS_DIR, "preprocessor.joblib"))
+    xgb_final.save(os.path.join(SAVED_MODELS_DIR, "xgb_engine.joblib"))
+    lstm_final.save(os.path.join(SAVED_MODELS_DIR, "lstm_model"))
+    meta.save(os.path.join(SAVED_MODELS_DIR, "meta_learner.joblib"))
+
+    logger.info("All artifacts saved. Training pipeline complete.")
 
 
 if __name__ == "__main__":
