@@ -39,3 +39,6 @@ db.sqlite3
 
 # ML model artifacts
 saved_models/
+
+# Training data (bulk ingestion output)
+data_ingestion/training_data/
