@@ -334,8 +334,8 @@
                             {% for stock in portfolio %}
                             <tr
                                 data-symbol="{{ stock.symbol }}"
-                                data-ai-float="{{ stock.ai_signal_float|default:'' }}"
-                                onclick="openStockModal('{{ stock.symbol|escapejs }}', '{{ stock.ai_signal_float|default:''|escapejs }}')"
+                                data-ai-signal="{{ stock.ai_signal|default:'' }}"
+                                onclick="openStockModal(this.dataset.symbol, this.dataset.aiSignal)"
                             >
                                 <td style="color:var(--text-muted);">{{ forloop.counter }}</td>
                                 <td class="col-symbol">{{ stock.symbol }}</td>
@@ -357,7 +357,7 @@
                                     {% if stock.ai_signal == "Analyzing..." %}
                                     <span class="badge-analyzing">Analyzing...</span>
                                     {% else %}
-                                    <span class="ai-badge" data-score="{{ stock.ai_signal }}">{{ stock.ai_signal }}</span>
+                                    <span class="ai-badge" data-score="{{ stock.ai_signal }}">{{ stock.ai_signal|floatformat:2 }}</span>
                                     {% endif %}
                                 </td>
                             </tr>
