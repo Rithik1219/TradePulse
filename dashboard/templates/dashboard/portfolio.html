@@ -10,6 +10,9 @@
         integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YcnS/1fQ4TvjTGIe1NDAnjkfDnHr2Cf3phzT"
         crossorigin="anonymous"
     >
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.js"
+            integrity="sha384-tgbB5AKnszdcfwcZtTfuhR3Ko1XZdlDfsLtkxiiAZiVkkXCkFmp+FQFh+V/UTo54"
+            crossorigin="anonymous"></script>
 </head>
 <body>
 
@@ -23,6 +26,48 @@
 <!-- Main Content -->
 <div class="container my-4">
     <h2 class="mb-4">📊 Live Portfolio</h2>
+
+    <!-- Portfolio History Chart -->
+    <div class="card bg-dark border-secondary mb-4">
+        <div class="card-body">
+            <h5 class="card-title text-secondary mb-3">Portfolio Value Over Time</h5>
+            <canvas id="portfolioChart" height="100"></canvas>
+        </div>
+    </div>
+    <script>
+        (function () {
+            const labels = {{ chart_labels|safe }};
+            const values = {{ chart_values|safe }};
+            const ctx = document.getElementById('portfolioChart').getContext('2d');
+            new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Total Portfolio Value (₹)',
+                        data: values,
+                        borderColor: '#00e676',
+                        backgroundColor: 'rgba(0, 230, 118, 0.08)',
+                        pointBackgroundColor: '#00e676',
+                        fill: true,
+                        tension: 0.4,
+                        borderWidth: 2
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: { labels: { color: '#e0e0e0' } },
+                        tooltip: { mode: 'index', intersect: false }
+                    },
+                    scales: {
+                        x: { ticks: { color: '#9e9e9e' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+                        y: { ticks: { color: '#9e9e9e' }, grid: { color: 'rgba(255,255,255,0.05)' } }
+                    }
+                }
+            });
+        })();
+    </script>
 
     {% if error_message %}
     <div class="alert alert-danger" role="alert">
