@@ -5,18 +5,18 @@ End-to-end training script for TradePulse's Hybrid Ensemble.
 
 Pipeline stages
 ---------------
-1. **Mock data generation** — synthesises a DataFrame that simulates
-   thousands of raw technical indicators and sentiment scores plus an
-   OHLCV+sentiment time-series, so this script can be run and verified
-   without any live market data.
+1. **Load local data** — reads ``X_train.npy`` and ``y_train.npy`` from
+   ``data_ingestion/training_data/`` (produced by
+   ``data_ingestion/yfinance_bulk_ingestion.py``).
 
-2. **Preprocessing** — fits ``FeaturePreprocessor`` on the tabular
-   features (RobustScaler → PCA at 95 % variance retention).
+2. **Preprocessing** — derives a 2-D tabular representation from the
+   3-D sequential tensor (by flattening each sample's time-step
+   features), then fits ``FeaturePreprocessor`` on those tabular features
+   (RobustScaler → PCA at 95 % variance retention).
 
 3. **Base-learner training with out-of-fold (OOF) predictions**:
    a. ``XGBEngine`` — trained on the PCA-compressed tabular features.
-   b. ``LSTMModel`` — trained on the 3-D sequential OHLCV+sentiment
-      tensor.
+   b. ``LSTMModel`` — trained on the 3-D sequential OHLCV tensor.
    Both models produce OOF probability vectors using time-series
    cross-validation (``TimeSeriesSplit``) to avoid look-ahead bias.
 
@@ -26,10 +26,19 @@ Pipeline stages
 5. **Final evaluation** — the full ensemble is evaluated on a hold-out
    test set and key metrics are reported.
 
+6. **Save artifacts** — all trained models and the scaler/preprocessor
+   are persisted to ``saved_models/`` for use by the inference engine.
+
 Usage
 -----
     python -m ml_core.train_pipeline          # from the repo root
     python ml_core/train_pipeline.py          # direct execution
+
+Prerequisites
+-------------
+    Run ``python -m data_ingestion.yfinance_bulk_ingestion`` first to
+    generate ``data_ingestion/training_data/X_train.npy`` and
+    ``data_ingestion/training_data/y_train.npy``.
 """
 
 from __future__ import annotations
@@ -63,78 +72,64 @@ logger = logging.getLogger(__name__)
 # Configuration
 # ---------------------------------------------------------------------------
 
+_REPO_ROOT: str = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 RANDOM_SEED: int = 42
-N_SAMPLES: int = 2000          # Total number of data points (days)
-N_RAW_FEATURES: int = 500      # Simulated raw technical + sentiment columns
-SEQ_LEN: int = 30              # Look-back window for the LSTM (days)
-OHLCV_FEATURES: int = 6        # OHLCV (5) + sentiment score (1)
 TEST_SIZE: int = 200           # Hold-out test-set size
 N_CV_SPLITS: int = 5           # TimeSeriesSplit folds for OOF generation
 PCA_VARIANCE: float = 0.95     # Variance threshold for PCA
-SAVED_MODELS_DIR: str = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "saved_models",
+SAVED_MODELS_DIR: str = os.path.join(_REPO_ROOT, "saved_models")
+TRAINING_DATA_DIR: str = os.path.join(
+    _REPO_ROOT, "data_ingestion", "training_data"
 )
 
 
 # ---------------------------------------------------------------------------
-# Mock data generator
+# Data loader
 # ---------------------------------------------------------------------------
 
-def generate_mock_data(
-    n_samples: int = N_SAMPLES,
-    n_features: int = N_RAW_FEATURES,
-    seq_len: int = SEQ_LEN,
-    ohlcv_features: int = OHLCV_FEATURES,
-    random_state: int = RANDOM_SEED,
-) -> tuple[pd.DataFrame, np.ndarray, np.ndarray]:
-    """Generate synthetic data mimicking the TradePulse feature set.
+def load_training_data(
+    data_dir: str = TRAINING_DATA_DIR,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Load pre-generated training tensors from disk.
+
+    Expects ``X_train.npy`` and ``y_train.npy`` to have been produced by
+    ``data_ingestion/yfinance_bulk_ingestion.py``.
+
+    Parameters
+    ----------
+    data_dir : str
+        Directory containing ``X_train.npy`` and ``y_train.npy``.
 
     Returns
     -------
-    df_tabular : pd.DataFrame, shape (n_samples, n_features)
-        High-dimensional tabular features (raw technical indicators +
-        sentiment scores) before any preprocessing.
-    X_seq : np.ndarray, shape (n_samples, seq_len, ohlcv_features)
-        3-D sequential tensor for the LSTM: the last ``seq_len`` days of
-        OHLCV data and a sentiment score for each sample.
+    X_seq : np.ndarray, shape (n_samples, seq_len, n_features)
+        3-D sequential tensor (OHLCV + engineered features per time step).
     y : np.ndarray, shape (n_samples,)
-        Binary labels: 1 = price went UP, 0 = price went DOWN.
+        Binary labels: 1 = next-day price UP, 0 = DOWN.
+
+    Raises
+    ------
+    FileNotFoundError
+        When either ``.npy`` file is missing from *data_dir*.
     """
-    rng = np.random.default_rng(random_state)
+    x_path = os.path.join(data_dir, "X_train.npy")
+    y_path = os.path.join(data_dir, "y_train.npy")
 
-    # --- Tabular features --------------------------------------------------
-    feature_names = [f"feature_{i:04d}" for i in range(n_features)]
-    raw_data = rng.standard_normal((n_samples, n_features)).astype(np.float32)
-    # Introduce realistic sparsity / outliers
-    outlier_mask = rng.random((n_samples, n_features)) < 0.01
-    raw_data[outlier_mask] *= 10.0
-    df_tabular = pd.DataFrame(raw_data, columns=feature_names)
+    for path in (x_path, y_path):
+        if not os.path.isfile(path):
+            raise FileNotFoundError(
+                f"Training data file not found: {path}\n"
+                "Run 'python -m data_ingestion.yfinance_bulk_ingestion' first."
+            )
 
-    # --- Sequential tensor for LSTM ----------------------------------------
-    # Simulate OHLCV-like data: cumulative price walk + volume + sentiment
-    price = np.cumsum(rng.standard_normal((n_samples + seq_len, 1)), axis=0)
-    # Build overlapping windows of shape (n_samples, seq_len, 1)
-    price_windows = np.lib.stride_tricks.sliding_window_view(
-        price[:, 0], seq_len
-    )  # (n_samples, seq_len)
-    # Repeat for O/H/L/C/V (4 synthetic price channels + 1 volume + 1 sentiment)
-    price_windows = price_windows[:n_samples]
-    volume = rng.lognormal(mean=10, sigma=1, size=(n_samples, seq_len, 1))
-    sentiment = rng.uniform(-1, 1, size=(n_samples, seq_len, 1))
-    price_channels = np.stack(
-        [price_windows] * (ohlcv_features - 2), axis=-1
-    )  # (n_samples, seq_len, ohlcv_features-2)
-    X_seq = np.concatenate(
-        [price_channels, volume, sentiment], axis=-1
-    ).astype(np.float32)  # (n_samples, seq_len, ohlcv_features)
+    X_seq = np.load(x_path)
+    y = np.load(y_path)
 
-    # --- Labels (binary) ---------------------------------------------------
-    # Use a simple future-return rule as a proxy for real labels
-    future_returns = np.diff(price[:, 0])[:n_samples]
-    y = (future_returns > 0).astype(np.float32)
+    logger.info("Loaded X_train from %s — shape: %s", x_path, X_seq.shape)
+    logger.info("Loaded y_train from %s — shape: %s", y_path, y.shape)
 
-    return df_tabular, X_seq, y
+    return X_seq.astype(np.float32), y.astype(np.float32)
 
 
 # ---------------------------------------------------------------------------
@@ -233,15 +228,25 @@ def run_training_pipeline() -> None:
     logger.info("=" * 60)
 
     # -----------------------------------------------------------------------
-    # 1. Generate mock data
+    # 1. Load local training data
     # -----------------------------------------------------------------------
-    logger.info("Generating mock dataset …")
-    df_tabular, X_seq, y = generate_mock_data()
+    logger.info("Loading training data from %s …", TRAINING_DATA_DIR)
+    X_seq, y = load_training_data()
+
+    # Derive a 2-D tabular representation for XGBoost/preprocessing by
+    # flattening each sample's (seq_len × n_features) time-step matrix.
+    n_samples, seq_len, n_seq_features = X_seq.shape
+    n_tabular_features = seq_len * n_seq_features
+    feature_names = [f"feature_{i:04d}" for i in range(n_tabular_features)]
+    df_tabular = pd.DataFrame(
+        X_seq.reshape(n_samples, n_tabular_features), columns=feature_names
+    )
+
     logger.info(
-        "Dataset: %d samples | %d tabular features | "
+        "Dataset: %d samples | %d tabular features (flattened) | "
         "seq shape: %s | label balance: %.2f %%",
-        len(y),
-        df_tabular.shape[1],
+        n_samples,
+        n_tabular_features,
         X_seq.shape,
         100 * y.mean(),
     )
@@ -249,8 +254,8 @@ def run_training_pipeline() -> None:
     # -----------------------------------------------------------------------
     # 2. Train/test split (time-aware — no shuffle)
     # -----------------------------------------------------------------------
-    n_test = TEST_SIZE
-    n_train = len(y) - n_test
+    n_test = min(TEST_SIZE, n_samples // 10)
+    n_train = n_samples - n_test
 
     df_train, df_test = df_tabular.iloc[:n_train], df_tabular.iloc[n_train:]
     X_seq_train, X_seq_test = X_seq[:n_train], X_seq[n_train:]
@@ -324,11 +329,18 @@ def run_training_pipeline() -> None:
     accuracy = float((test_preds == y_test).mean())
 
     logger.info("=" * 60)
-    logger.info("FINAL TEST METRICS")
+    logger.info("FINAL TEST METRICS (Meta-Learner on hold-out validation set)")
     logger.info("  ROC-AUC   : %.4f", auc)
     logger.info("  Log-Loss  : %.4f", ll)
     logger.info("  Accuracy  : %.4f", accuracy)
     logger.info("=" * 60)
+
+    print("=" * 60)
+    print("Meta-Learner Validation Results:")  # prominent console summary
+    print(f"  ROC-AUC  : {auc:.4f}")
+    print(f"  Log-Loss : {ll:.4f}")
+    print(f"  Accuracy : {accuracy:.4f}")
+    print("=" * 60)
 
     # -----------------------------------------------------------------------
     # 7. Save trained artifacts to disk
