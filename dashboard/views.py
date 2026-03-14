@@ -1,6 +1,8 @@
 import json
 import logging
 
+from datetime import timedelta
+
 from django.db.models import FloatField, Sum
 from django.db.models.expressions import ExpressionWrapper, F
 from django.db.models.functions import TruncDate
@@ -10,6 +12,23 @@ from django.utils import timezone
 from dashboard.models import PortfolioSnapshot
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# ML predictor — loaded once at module level so the heavy artifacts stay in
+# memory for the lifetime of the server process.
+# ---------------------------------------------------------------------------
+
+_predictor = None
+
+try:
+    from ml_core.predictor import TradePulsePredictor
+    _predictor = TradePulsePredictor()
+except Exception:
+    logger.warning(
+        "TradePulsePredictor could not be loaded. "
+        "AI signals will fall back to 'Analyzing…'.",
+        exc_info=True,
+    )
 
 
 def portfolio_view(request):
@@ -41,7 +60,34 @@ def portfolio_view(request):
         portfolio = df.to_dict(orient="records")
 
         for record in portfolio:
-            record["ai_signal"] = "Analyzing..."
+            ai_signal = "Analyzing..."
+            if _predictor is not None:
+                try:
+                    symbol = record.get("symbol", "")
+                    token = record.get("symboltoken", "")
+                    now = timezone.now()
+                    from_date = (now - timedelta(days=30)).strftime(
+                        "%Y-%m-%d 09:15"
+                    )
+                    to_date = now.strftime("%Y-%m-%d 15:30")
+                    hist_df = client.get_historical_data(
+                        symbol=symbol,
+                        token=token,
+                        from_date=from_date,
+                        to_date=to_date,
+                    )
+                    if not hist_df.empty:
+                        prob = _predictor.predict_signal(
+                            hist_df, sentiment_score=0.0
+                        )
+                        ai_signal = f"{prob:.2f}"
+                except Exception:
+                    logger.warning(
+                        "AI prediction failed for %s; using fallback.",
+                        record.get("symbol", "?"),
+                        exc_info=True,
+                    )
+            record["ai_signal"] = ai_signal
 
         today = timezone.now().date()
         existing_symbols = set(

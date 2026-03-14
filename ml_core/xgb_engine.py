@@ -27,6 +27,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
+import joblib
 import numpy as np
 from xgboost import XGBClassifier
 
@@ -200,3 +201,39 @@ class XGBEngine:
         # XGBClassifier.predict_proba returns (n_samples, 2); we want
         # the probability for class 1 (UP).
         return self.model_.predict_proba(X)[:, 1]
+
+    # ------------------------------------------------------------------
+    # Persistence
+    # ------------------------------------------------------------------
+
+    def save(self, path: str) -> None:
+        """Persist the fitted XGBEngine to disk using joblib.
+
+        Parameters
+        ----------
+        path : str
+            File path (e.g. ``"saved_models/xgb_engine.joblib"``).
+        """
+        if self.model_ is None:
+            raise RuntimeError("Cannot save an unfitted XGBEngine.")
+        joblib.dump(self, path)
+        logger.info("XGBEngine saved to %s", path)
+
+    @classmethod
+    def load(cls, path: str) -> "XGBEngine":
+        """Load a previously saved ``XGBEngine`` from disk.
+
+        Parameters
+        ----------
+        path : str
+            File path previously passed to :meth:`save`.
+
+        Returns
+        -------
+        XGBEngine
+        """
+        obj = joblib.load(path)
+        if not isinstance(obj, cls):
+            raise TypeError(f"Expected an XGBEngine, got {type(obj)}.")
+        logger.info("XGBEngine loaded from %s", path)
+        return obj

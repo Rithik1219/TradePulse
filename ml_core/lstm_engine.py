@@ -16,7 +16,9 @@ with the meta-learner stacking layer.
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 from typing import Optional
 
 import numpy as np
@@ -305,3 +307,67 @@ class LSTMModel:
         with torch.no_grad():
             probs = self.model_(tensor).cpu().numpy()
         return probs
+
+    # ------------------------------------------------------------------
+    # Persistence
+    # ------------------------------------------------------------------
+
+    def save(self, path: str) -> None:
+        """Persist the fitted LSTM model to disk.
+
+        Saves the PyTorch state dict via ``torch.save`` and a companion
+        JSON file with the constructor metadata needed to rebuild the
+        network architecture on load.
+
+        Parameters
+        ----------
+        path : str
+            Base file path **without extension**.  Two files are created:
+            ``<path>.pt`` (weights) and ``<path>.json`` (metadata).
+        """
+        if self.model_ is None:
+            raise RuntimeError("Cannot save an unfitted LSTMModel.")
+        torch.save(self.model_.state_dict(), path + ".pt")
+        meta = {
+            "input_size": self.input_size,
+            "seq_len": self.seq_len,
+            "hidden_size": self.hidden_size,
+            "num_layers": self.num_layers,
+            "dropout": self.dropout,
+            "learning_rate": self.learning_rate,
+            "epochs": self.epochs,
+            "batch_size": self.batch_size,
+            "patience": self.patience,
+            "random_state": self.random_state,
+        }
+        with open(path + ".json", "w") as f:
+            json.dump(meta, f, indent=2)
+        logger.info("LSTMModel saved to %s.pt / %s.json", path, path)
+
+    @classmethod
+    def load(cls, path: str, device: str | None = None) -> "LSTMModel":
+        """Load a previously saved ``LSTMModel`` from disk.
+
+        Parameters
+        ----------
+        path : str
+            Base file path **without extension** (same value passed to
+            :meth:`save`).
+        device : str or None
+            Device to load the model onto.  ``None`` triggers auto-detection.
+
+        Returns
+        -------
+        LSTMModel
+        """
+        with open(path + ".json", "r") as f:
+            meta = json.load(f)
+        obj = cls(device=device, **meta)
+        obj.model_ = obj._build_model()
+        state_dict = torch.load(
+            path + ".pt", map_location=obj.device, weights_only=True
+        )
+        obj.model_.load_state_dict(state_dict)
+        obj.model_.eval()
+        logger.info("LSTMModel loaded from %s.pt", path)
+        return obj

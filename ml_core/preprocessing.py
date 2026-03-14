@@ -23,6 +23,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
+import joblib
 import numpy as np
 import pandas as pd
 from sklearn.decomposition import PCA
@@ -174,3 +175,43 @@ class FeaturePreprocessor:
     def cumulative_variance_(self) -> float:
         """Total cumulative variance explained by the selected components."""
         return float(np.sum(self.explained_variance_ratio_))
+
+    # ------------------------------------------------------------------
+    # Persistence
+    # ------------------------------------------------------------------
+
+    def save(self, path: str) -> None:
+        """Persist the fitted preprocessor to disk using joblib.
+
+        Parameters
+        ----------
+        path : str
+            File path (e.g. ``"saved_models/preprocessor.joblib"``).
+        """
+        if self.pipeline_ is None:
+            raise RuntimeError(
+                "Cannot save an unfitted FeaturePreprocessor."
+            )
+        joblib.dump(self, path)
+        logger.info("FeaturePreprocessor saved to %s", path)
+
+    @classmethod
+    def load(cls, path: str) -> "FeaturePreprocessor":
+        """Load a previously saved ``FeaturePreprocessor`` from disk.
+
+        Parameters
+        ----------
+        path : str
+            File path previously passed to :meth:`save`.
+
+        Returns
+        -------
+        FeaturePreprocessor
+        """
+        obj = joblib.load(path)
+        if not isinstance(obj, cls):
+            raise TypeError(
+                f"Expected a FeaturePreprocessor, got {type(obj)}."
+            )
+        logger.info("FeaturePreprocessor loaded from %s", path)
+        return obj

@@ -36,3 +36,6 @@ htmlcov/
 
 # Django
 db.sqlite3
+
+# ML model artifacts
+saved_models/
