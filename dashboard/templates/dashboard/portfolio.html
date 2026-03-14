@@ -13,118 +13,666 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.js"
             integrity="sha384-tgbB5AKnszdcfwcZtTfuhR3Ko1XZdlDfsLtkxiiAZiVkkXCkFmp+FQFh+V/UTo54"
             crossorigin="anonymous"></script>
+    <style>
+        :root {
+            --bg-base: #0d0f14;
+            --bg-card: #161b25;
+            --bg-card-hover: #1c2333;
+            --border-subtle: rgba(255, 255, 255, 0.07);
+            --accent-green: #00e676;
+            --accent-red: #ff1744;
+            --accent-yellow: #ffd600;
+            --accent-blue: #40c4ff;
+            --text-primary: #e0e6f0;
+            --text-muted: #6c7a8d;
+            --text-dim: #9ea8b4;
+        }
+        html, body {
+            background-color: var(--bg-base);
+            color: var(--text-primary);
+            font-family: 'Segoe UI', 'Inter', sans-serif;
+            font-size: 0.875rem;
+        }
+        .navbar-dark.tp-navbar {
+            background-color: #0a0c10 !important;
+            border-bottom: 1px solid var(--border-subtle);
+        }
+        .tp-navbar .navbar-brand {
+            font-weight: 700;
+            letter-spacing: 0.05em;
+            color: var(--accent-green) !important;
+            font-size: 1.1rem;
+        }
+        .tp-navbar .nav-tagline {
+            color: var(--text-muted);
+            font-size: 0.78rem;
+            letter-spacing: 0.03em;
+        }
+        /* Cards */
+        .tp-card {
+            background-color: var(--bg-card);
+            border: 1px solid var(--border-subtle);
+            border-radius: 6px;
+        }
+        .tp-card-title {
+            font-size: 0.72rem;
+            font-weight: 600;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            margin-bottom: 0.75rem;
+        }
+        /* Portfolio table — Bloomberg terminal style */
+        .tp-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.8rem;
+        }
+        .tp-table thead th {
+            background-color: #0e1117;
+            color: var(--text-muted);
+            font-size: 0.68rem;
+            font-weight: 600;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            padding: 0.5rem 0.75rem;
+            border-bottom: 1px solid var(--border-subtle);
+            white-space: nowrap;
+        }
+        .tp-table tbody tr {
+            border-bottom: 1px solid rgba(255,255,255,0.04);
+            cursor: pointer;
+            transition: background 0.12s ease;
+        }
+        .tp-table tbody tr:hover {
+            background-color: var(--bg-card-hover);
+        }
+        .tp-table tbody td {
+            padding: 0.45rem 0.75rem;
+            color: var(--text-primary);
+            vertical-align: middle;
+        }
+        .tp-table .col-symbol {
+            font-family: 'Courier New', monospace;
+            font-weight: 600;
+            color: var(--accent-blue);
+            letter-spacing: 0.02em;
+        }
+        .tp-table .col-price {
+            font-family: 'Courier New', monospace;
+            color: var(--text-dim);
+        }
+        .tp-table .col-qty {
+            color: var(--text-dim);
+        }
+        /* AI signal badges */
+        .badge-bullish {
+            background-color: rgba(0, 230, 118, 0.15);
+            color: var(--accent-green);
+            border: 1px solid rgba(0, 230, 118, 0.35);
+            font-family: 'Courier New', monospace;
+            font-weight: 700;
+            padding: 0.22em 0.55em;
+            border-radius: 3px;
+            font-size: 0.75rem;
+        }
+        .badge-bearish {
+            background-color: rgba(255, 23, 68, 0.15);
+            color: var(--accent-red);
+            border: 1px solid rgba(255, 23, 68, 0.35);
+            font-family: 'Courier New', monospace;
+            font-weight: 700;
+            padding: 0.22em 0.55em;
+            border-radius: 3px;
+            font-size: 0.75rem;
+        }
+        .badge-neutral {
+            background-color: rgba(255, 214, 0, 0.12);
+            color: var(--accent-yellow);
+            border: 1px solid rgba(255, 214, 0, 0.3);
+            font-family: 'Courier New', monospace;
+            font-weight: 700;
+            padding: 0.22em 0.55em;
+            border-radius: 3px;
+            font-size: 0.75rem;
+        }
+        .badge-analyzing {
+            background-color: rgba(108, 122, 141, 0.15);
+            color: var(--text-muted);
+            border: 1px solid rgba(108, 122, 141, 0.25);
+            font-weight: 600;
+            padding: 0.22em 0.55em;
+            border-radius: 3px;
+            font-size: 0.75rem;
+        }
+        /* Source badges */
+        .badge-source {
+            font-size: 0.65rem;
+            letter-spacing: 0.06em;
+            padding: 0.2em 0.5em;
+            border-radius: 2px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .badge-holdings {
+            background-color: rgba(64, 196, 255, 0.15);
+            color: var(--accent-blue);
+        }
+        .badge-positions {
+            background-color: rgba(255, 214, 0, 0.12);
+            color: var(--accent-yellow);
+        }
+        /* News card */
+        .news-headline {
+            border-left: 3px solid var(--border-subtle);
+            padding: 0.55rem 0.75rem;
+            margin-bottom: 0.6rem;
+            background: rgba(255,255,255,0.025);
+            border-radius: 0 4px 4px 0;
+        }
+        .news-headline:hover {
+            background: rgba(255,255,255,0.04);
+        }
+        .news-headline .headline-text {
+            font-size: 0.79rem;
+            color: var(--text-primary);
+            line-height: 1.4;
+            margin-bottom: 0.3rem;
+        }
+        .news-headline .headline-meta {
+            font-size: 0.68rem;
+            color: var(--text-muted);
+        }
+        .sentiment-badge {
+            font-size: 0.64rem;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+            padding: 0.18em 0.5em;
+            border-radius: 2px;
+            text-transform: uppercase;
+        }
+        .sentiment-positive {
+            background: rgba(0,230,118,0.15);
+            color: var(--accent-green);
+        }
+        .sentiment-negative {
+            background: rgba(255,23,68,0.12);
+            color: var(--accent-red);
+        }
+        .sentiment-neutral {
+            background: rgba(255,214,0,0.1);
+            color: var(--accent-yellow);
+        }
+        .llm-banner {
+            background: rgba(64,196,255,0.07);
+            border: 1px dashed rgba(64,196,255,0.2);
+            border-radius: 4px;
+            padding: 0.5rem 0.75rem;
+            font-size: 0.7rem;
+            color: var(--accent-blue);
+            text-align: center;
+            letter-spacing: 0.04em;
+        }
+        /* Section divider */
+        .tp-divider {
+            border-color: var(--border-subtle);
+            margin: 1.25rem 0;
+        }
+        /* Modal */
+        .tp-modal .modal-content {
+            background-color: #131720;
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 8px;
+        }
+        .tp-modal .modal-header {
+            border-bottom: 1px solid var(--border-subtle);
+            padding: 1rem 1.25rem 0.75rem;
+        }
+        .tp-modal .modal-body {
+            padding: 1.25rem;
+        }
+        .modal-symbol {
+            font-family: 'Courier New', monospace;
+            font-size: 1.2rem;
+            font-weight: 700;
+            color: var(--accent-blue);
+            letter-spacing: 0.04em;
+        }
+        .modal-score-label {
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+        }
+        .modal-score-value {
+            font-family: 'Courier New', monospace;
+            font-size: 1.5rem;
+            font-weight: 700;
+        }
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 5px; height: 5px; }
+        ::-webkit-scrollbar-track { background: var(--bg-base); }
+        ::-webkit-scrollbar-thumb { background: #2e3548; border-radius: 3px; }
+    </style>
 </head>
 <body>
 
 <!-- Navbar -->
-<nav class="navbar navbar-expand-lg navbar-dark bg-dark border-bottom border-secondary">
-    <div class="container">
-        <a class="navbar-brand fw-bold" href="/">TradePulse</a>
+<nav class="navbar navbar-expand-lg navbar-dark tp-navbar">
+    <div class="container-fluid px-4">
+        <a class="navbar-brand" href="/">⚡ TradePulse</a>
+        <span class="nav-tagline d-none d-md-block">Quantitative Trading Terminal</span>
+        <span class="nav-tagline ms-auto d-none d-md-block" id="live-clock"></span>
     </div>
 </nav>
 
 <!-- Main Content -->
-<div class="container my-4">
-    <h2 class="mb-4">📊 Live Portfolio</h2>
+<div class="container-fluid px-4 py-3">
 
-    <!-- Portfolio History Chart -->
-    <div class="card bg-dark border-secondary mb-4">
-        <div class="card-body">
-            <h5 class="card-title text-secondary mb-3">Portfolio Value Over Time</h5>
-            <canvas id="portfolioChart" height="100"></canvas>
-        </div>
+    <div class="d-flex align-items-center mb-3">
+        <h5 class="mb-0 me-2" style="font-weight:700; letter-spacing:0.04em;">📊 Live Portfolio</h5>
+        <span style="font-size:0.7rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.1em; margin-top:2px;">Live · NSE/BSE</span>
     </div>
-    <script>
-        (function () {
-            const labels = {{ chart_labels|safe }};
-            const values = {{ chart_values|safe }};
-            const ctx = document.getElementById('portfolioChart').getContext('2d');
-            new Chart(ctx, {
-                type: 'line',
-                data: {
-                    labels: labels,
-                    datasets: [{
-                        label: 'Total Portfolio Value (₹)',
-                        data: values,
-                        borderColor: '#00e676',
-                        backgroundColor: 'rgba(0, 230, 118, 0.08)',
-                        pointBackgroundColor: '#00e676',
-                        fill: true,
-                        tension: 0.4,
-                        borderWidth: 2
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    plugins: {
-                        legend: { labels: { color: '#e0e0e0' } },
-                        tooltip: { mode: 'index', intersect: false }
-                    },
-                    scales: {
-                        x: { ticks: { color: '#9e9e9e' }, grid: { color: 'rgba(255,255,255,0.05)' } },
-                        y: { ticks: { color: '#9e9e9e' }, grid: { color: 'rgba(255,255,255,0.05)' } }
-                    }
-                }
-            });
-        })();
-    </script>
 
     {% if error_message %}
-    <div class="alert alert-danger" role="alert">
-        {{ error_message }}
+    <div class="alert alert-danger d-flex align-items-center py-2" role="alert" style="font-size:0.82rem; border-radius:4px;">
+        <span>⚠ {{ error_message }}</span>
     </div>
     {% endif %}
 
-    {% if portfolio %}
-    <div class="table-responsive">
-        <table class="table table-dark table-striped table-hover align-middle">
-            <thead>
-                <tr>
-                    <th scope="col">#</th>
-                    <th scope="col">Symbol</th>
-                    <th scope="col">Quantity</th>
-                    <th scope="col">Avg Price</th>
-                    <th scope="col">Source</th>
-                    <th scope="col">AI Prediction</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for stock in portfolio %}
-                <tr>
-                    <th scope="row">{{ forloop.counter }}</th>
-                    <td>{{ stock.symbol }}</td>
-                    <td>{{ stock.quantity }}</td>
-                    <td>{{ stock.avg_price }}</td>
-                    <td>
-                        <span class="badge bg-info text-dark">{{ stock.source }}</span>
-                    </td>
-                    <td>
-                        {% if stock.ai_signal == "Analyzing..." %}
-                            <span class="badge bg-secondary">{{ stock.ai_signal }}</span>
-                        {% elif stock.ai_signal >= 0.6 %}
-                            <span class="badge bg-success">{{ stock.ai_signal }} 📈</span>
-                        {% elif stock.ai_signal <= 0.4 %}
-                            <span class="badge bg-danger">{{ stock.ai_signal }} 📉</span>
-                        {% else %}
-                            <span class="badge bg-warning text-dark">{{ stock.ai_signal }} ↔</span>
-                        {% endif %}
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+    <!-- ═══════════════════════════════════════════════════════════════════
+         TOP ROW: Portfolio Net Worth Chart (8/12)  +  Sector Doughnut (4/12)
+         ═══════════════════════════════════════════════════════════════════ -->
+    <div class="row g-3 mb-3">
+
+        <!-- Net Worth Line Chart -->
+        <div class="col-lg-8">
+            <div class="tp-card p-3 h-100">
+                <div class="tp-card-title">📈 Portfolio Net Worth — Historical</div>
+                <canvas id="portfolioChart" height="110"></canvas>
+            </div>
+        </div>
+
+        <!-- Sector Allocation Doughnut -->
+        <div class="col-lg-4">
+            <div class="tp-card p-3 h-100">
+                <div class="tp-card-title">🗂 Sector Allocation</div>
+                {% if portfolio %}
+                <canvas id="sectorChart" height="230"></canvas>
+                {% else %}
+                <div class="d-flex align-items-center justify-content-center h-75 text-muted" style="font-size:0.8rem;">No allocation data</div>
+                {% endif %}
+            </div>
+        </div>
+
+    </div><!-- /top row -->
+
+    <!-- ═══════════════════════════════════════════════════════════════════
+         MIDDLE ROW: Portfolio Table (8/12)  +  News & Sentiment (4/12)
+         ═══════════════════════════════════════════════════════════════════ -->
+    <div class="row g-3">
+
+        <!-- Portfolio Table -->
+        <div class="col-lg-8">
+            <div class="tp-card p-3">
+                <div class="tp-card-title">🗃 Holdings &amp; Positions <span style="color:var(--text-muted); font-size:0.65rem;">— click row for price history</span></div>
+                {% if portfolio %}
+                <div class="table-responsive" style="max-height:420px; overflow-y:auto;">
+                    <table class="tp-table" id="portfolioTable">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>Symbol</th>
+                                <th>Qty</th>
+                                <th>Avg Price (₹)</th>
+                                <th>Market Value (₹)</th>
+                                <th>Source</th>
+                                <th>AI Prediction</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for stock in portfolio %}
+                            <tr
+                                data-symbol="{{ stock.symbol }}"
+                                data-ai-float="{{ stock.ai_signal_float|default:'' }}"
+                                onclick="openStockModal('{{ stock.symbol|escapejs }}', '{{ stock.ai_signal_float|default:''|escapejs }}')"
+                            >
+                                <td style="color:var(--text-muted);">{{ forloop.counter }}</td>
+                                <td class="col-symbol">{{ stock.symbol }}</td>
+                                <td class="col-qty">{{ stock.quantity }}</td>
+                                <td class="col-price">{{ stock.avg_price }}</td>
+                                <td class="col-price">
+                                    {% if stock.market_value %}
+                                    {{ stock.market_value }}
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if stock.source == "holdings" %}
+                                    <span class="badge-source badge-holdings">Holdings</span>
+                                    {% else %}
+                                    <span class="badge-source badge-positions">{{ stock.source }}</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if stock.ai_signal == "Analyzing..." %}
+                                    <span class="badge-analyzing">Analyzing...</span>
+                                    {% else %}
+                                    <span class="ai-badge" data-score="{{ stock.ai_signal }}">{{ stock.ai_signal }}</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% elif not error_message %}
+                <div class="text-muted text-center py-4" style="font-size:0.82rem;">No portfolio data available.</div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Market Sentiment & News -->
+        <div class="col-lg-4">
+            <div class="tp-card p-3 h-100">
+                <div class="tp-card-title">📰 Market Sentiment &amp; News</div>
+
+                <!-- Aggregate sentiment bar (placeholder) -->
+                <div class="d-flex align-items-center mb-3 gap-2">
+                    <span style="font-size:0.7rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.08em;">Market Mood</span>
+                    <div class="flex-grow-1" style="height:6px; background:rgba(255,255,255,0.07); border-radius:3px; overflow:hidden;">
+                        <div style="width:62%; height:100%; background:linear-gradient(90deg, var(--accent-green), #00bfa5); border-radius:3px;"></div>
+                    </div>
+                    <span style="font-size:0.72rem; font-weight:700; color:var(--accent-green);">62 BULLISH</span>
+                </div>
+
+                <!-- Fake headlines — ready for LLM integration -->
+                <div class="news-headline">
+                    <div class="headline-text">RBI maintains repo rate at 6.5%; signals accommodative stance amid global uncertainty</div>
+                    <div class="headline-meta d-flex align-items-center gap-2">
+                        <span>Economic Times · 2h ago</span>
+                        <span class="sentiment-badge sentiment-positive">Positive</span>
+                    </div>
+                </div>
+
+                <div class="news-headline">
+                    <div class="headline-text">Nifty 50 consolidates near 22,400 as FII outflows weigh on heavyweight IT stocks</div>
+                    <div class="headline-meta d-flex align-items-center gap-2">
+                        <span>Moneycontrol · 4h ago</span>
+                        <span class="sentiment-badge sentiment-negative">Negative</span>
+                    </div>
+                </div>
+
+                <div class="news-headline">
+                    <div class="headline-text">Reliance Industries Q4 preview: analysts expect 8–12% YoY PAT growth on Jio ARPU uptick</div>
+                    <div class="headline-meta d-flex align-items-center gap-2">
+                        <span>Business Standard · 6h ago</span>
+                        <span class="sentiment-badge sentiment-neutral">Neutral</span>
+                    </div>
+                </div>
+
+                <hr class="tp-divider">
+
+                <div class="llm-banner">
+                    🤖 LLM-powered live sentiment analysis — coming soon
+                </div>
+            </div>
+        </div>
+
+    </div><!-- /middle row -->
+
+</div><!-- /container -->
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     STOCK DRILL-DOWN MODAL
+     ═══════════════════════════════════════════════════════════════════════ -->
+<div class="modal fade tp-modal" id="stockModal" tabindex="-1" aria-labelledby="stockModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div>
+                    <div class="modal-symbol" id="modalSymbol">—</div>
+                    <div style="font-size:0.7rem; color:var(--text-muted); margin-top:2px;">60-Day Close Price History</div>
+                </div>
+                <div class="ms-auto d-flex align-items-center gap-4 me-3">
+                    <div class="text-center">
+                        <div class="modal-score-label">AI Signal</div>
+                        <div class="modal-score-value" id="modalScore">—</div>
+                    </div>
+                    <div class="text-center">
+                        <div class="modal-score-label">Verdict</div>
+                        <div style="font-size:0.85rem; font-weight:700;" id="modalVerdict">—</div>
+                    </div>
+                </div>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <canvas id="modalChart" height="130"></canvas>
+                <div id="modalNoData" class="text-center text-muted py-4 d-none" style="font-size:0.82rem;">
+                    No historical price data available for this symbol.
+                </div>
+            </div>
+        </div>
     </div>
-    {% elif not error_message %}
-    <div class="alert alert-info" role="alert">
-        No portfolio data available.
-    </div>
-    {% endif %}
 </div>
 
+<!-- ═══════════════════════════════════════════════════════════════════════
+     SCRIPTS
+     ═══════════════════════════════════════════════════════════════════════ -->
 <script
     src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
     integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz"
     crossorigin="anonymous"
 ></script>
+
+<script>
+// ── Live clock ──────────────────────────────────────────────────────────────
+(function () {
+    const el = document.getElementById('live-clock');
+    if (!el) return;
+    function tick() {
+        const now = new Date();
+        el.textContent = now.toLocaleTimeString('en-IN', { hour12: false });
+    }
+    tick();
+    setInterval(tick, 1000);
+})();
+
+// ── Shared Chart.js defaults ────────────────────────────────────────────────
+Chart.defaults.color = '#6c7a8d';
+Chart.defaults.borderColor = 'rgba(255,255,255,0.06)';
+
+// ── 1. Portfolio Net-Worth Line Chart ────────────────────────────────────────
+(function () {
+    const labels = {{ chart_labels|safe }};
+    const values = {{ chart_values|safe }};
+    const ctx = document.getElementById('portfolioChart').getContext('2d');
+    new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: 'Total Portfolio Value (₹)',
+                data: values,
+                borderColor: '#00e676',
+                backgroundColor: 'rgba(0, 230, 118, 0.07)',
+                pointBackgroundColor: '#00e676',
+                pointRadius: 3,
+                fill: true,
+                tension: 0.4,
+                borderWidth: 2
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: {
+                legend: { labels: { color: '#9ea8b4', font: { size: 11 } } },
+                tooltip: { mode: 'index', intersect: false }
+            },
+            scales: {
+                x: { ticks: { color: '#6c7a8d', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.04)' } },
+                y: { ticks: { color: '#6c7a8d', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.04)' } }
+            }
+        }
+    });
+})();
+
+// ── 2. Sector Allocation Doughnut Chart ──────────────────────────────────────
+(function () {
+    const canvas = document.getElementById('sectorChart');
+    if (!canvas) return;
+    const labels = {{ sector_labels|safe }};
+    const values = {{ sector_values|safe }};
+    if (!labels.length) return;
+
+    const palette = [
+        '#00e676','#40c4ff','#ffd600','#ff6d00','#ea80fc',
+        '#64ffda','#ff4081','#b2ff59','#ff6e40','#18ffff',
+        '#8d6e63','#90a4ae'
+    ];
+
+    new Chart(canvas.getContext('2d'), {
+        type: 'doughnut',
+        data: {
+            labels: labels,
+            datasets: [{
+                data: values,
+                backgroundColor: palette.slice(0, labels.length).map(c => c + '33'),
+                borderColor: palette.slice(0, labels.length),
+                borderWidth: 1.5,
+                hoverOffset: 8
+            }]
+        },
+        options: {
+            responsive: true,
+            cutout: '68%',
+            plugins: {
+                legend: {
+                    position: 'right',
+                    labels: {
+                        color: '#9ea8b4',
+                        font: { size: 10 },
+                        boxWidth: 10,
+                        padding: 10
+                    }
+                },
+                tooltip: {
+                    callbacks: {
+                        label: function(ctx) {
+                            const total = ctx.dataset.data.reduce((a, b) => a + b, 0);
+                            const pct = total > 0 ? ((ctx.parsed / total) * 100).toFixed(1) : '0';
+                            return ` ${ctx.label}: ₹${ctx.parsed.toLocaleString('en-IN')} (${pct}%)`;
+                        }
+                    }
+                }
+            }
+        }
+    });
+})();
+
+// ── 3. AI Signal badge colouring ────────────────────────────────────────────
+(function () {
+    document.querySelectorAll('.ai-badge').forEach(function (el) {
+        const score = parseFloat(el.dataset.score);
+        if (isNaN(score)) return;
+        if (score > 0.55) {
+            el.className = 'badge-bullish';
+            el.textContent = score.toFixed(2) + ' ▲';
+        } else if (score < 0.45) {
+            el.className = 'badge-bearish';
+            el.textContent = score.toFixed(2) + ' ▼';
+        } else {
+            el.className = 'badge-neutral';
+            el.textContent = score.toFixed(2) + ' ↔';
+        }
+    });
+})();
+
+// ── 4. Stock Drill-Down Modal ────────────────────────────────────────────────
+const _historicalData = {{ historical_charts_json|safe }};
+let _modalChartInstance = null;
+
+function openStockModal(symbol, aiSignal) {
+    // Update header info
+    document.getElementById('modalSymbol').textContent = symbol;
+
+    const score = parseFloat(aiSignal);
+    const scoreEl = document.getElementById('modalScore');
+    const verdictEl = document.getElementById('modalVerdict');
+
+    if (isNaN(score)) {
+        scoreEl.textContent = 'N/A';
+        scoreEl.style.color = '#6c7a8d';
+        verdictEl.textContent = 'Pending';
+        verdictEl.style.color = '#6c7a8d';
+    } else {
+        scoreEl.textContent = score.toFixed(2);
+        if (score > 0.55) {
+            scoreEl.style.color = '#00e676';
+            verdictEl.textContent = '▲ BULLISH';
+            verdictEl.style.color = '#00e676';
+        } else if (score < 0.45) {
+            scoreEl.style.color = '#ff1744';
+            verdictEl.textContent = '▼ BEARISH';
+            verdictEl.style.color = '#ff1744';
+        } else {
+            scoreEl.style.color = '#ffd600';
+            verdictEl.textContent = '↔ NEUTRAL';
+            verdictEl.style.color = '#ffd600';
+        }
+    }
+
+    // Render historical chart
+    const canvasEl = document.getElementById('modalChart');
+    const noDataEl = document.getElementById('modalNoData');
+    const stockData = _historicalData[symbol];
+
+    if (_modalChartInstance) {
+        _modalChartInstance.destroy();
+        _modalChartInstance = null;
+    }
+
+    if (!stockData || !stockData.dates || !stockData.dates.length) {
+        canvasEl.classList.add('d-none');
+        noDataEl.classList.remove('d-none');
+    } else {
+        canvasEl.classList.remove('d-none');
+        noDataEl.classList.add('d-none');
+
+        const lineColor = (!isNaN(score) && score > 0.55)
+            ? '#00e676'
+            : (!isNaN(score) && score < 0.45) ? '#ff1744' : '#ffd600';
+
+        _modalChartInstance = new Chart(canvasEl.getContext('2d'), {
+            type: 'line',
+            data: {
+                labels: stockData.dates,
+                datasets: [{
+                    label: symbol + ' Close (₹)',
+                    data: stockData.closes,
+                    borderColor: lineColor,
+                    backgroundColor: lineColor + '12',
+                    pointRadius: 2,
+                    fill: true,
+                    tension: 0.35,
+                    borderWidth: 2
+                }]
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: { labels: { color: '#9ea8b4', font: { size: 11 } } },
+                    tooltip: { mode: 'index', intersect: false }
+                },
+                scales: {
+                    x: { ticks: { color: '#6c7a8d', font: { size: 9 }, maxTicksLimit: 10 }, grid: { color: 'rgba(255,255,255,0.04)' } },
+                    y: { ticks: { color: '#6c7a8d', font: { size: 9 } }, grid: { color: 'rgba(255,255,255,0.04)' } }
+                }
+            }
+        });
+    }
+
+    new bootstrap.Modal(document.getElementById('stockModal')).show();
+}
+</script>
 </body>
 </html>

@@ -21,6 +21,67 @@ logger = logging.getLogger(__name__)
 _MARKET_OPEN_TIME = "09:15"
 _MARKET_CLOSE_TIME = "15:30"
 _ANGEL_ONE_REQUEST_DELAY = 0.5  # seconds — stay under 3 req/s rate limit
+_HISTORICAL_DAYS = 60  # days of OHLCV history to fetch per symbol
+
+# ---------------------------------------------------------------------------
+# Sector mapping — maps NSE trading symbols to their market sector.
+# Unmapped symbols fall back to "Other".
+# ---------------------------------------------------------------------------
+
+_SECTOR_MAP: dict = {
+    "RELIANCE-EQ": "Energy",
+    "ONGC-EQ": "Energy",
+    "COALINDIA-EQ": "Energy",
+    "BPCL-EQ": "Energy",
+    "IOC-EQ": "Energy",
+    "TCS-EQ": "IT",
+    "INFY-EQ": "IT",
+    "WIPRO-EQ": "IT",
+    "TECHM-EQ": "IT",
+    "HCLTECH-EQ": "IT",
+    "LTIM-EQ": "IT",
+    "MPHASIS-EQ": "IT",
+    "HDFCBANK-EQ": "Banking",
+    "ICICIBANK-EQ": "Banking",
+    "SBIN-EQ": "Banking",
+    "KOTAKBANK-EQ": "Banking",
+    "AXISBANK-EQ": "Banking",
+    "INDUSINDBK-EQ": "Banking",
+    "FEDERALBNK-EQ": "Banking",
+    "BAJFINANCE-EQ": "Finance",
+    "BAJAJFINSV-EQ": "Finance",
+    "HDFCLIFE-EQ": "Finance",
+    "SBILIFE-EQ": "Finance",
+    "BHARTIARTL-EQ": "Telecom",
+    "IDEA-EQ": "Telecom",
+    "SUNPHARMA-EQ": "Pharma",
+    "DRREDDY-EQ": "Pharma",
+    "CIPLA-EQ": "Pharma",
+    "DIVISLAB-EQ": "Pharma",
+    "APOLLOHOSP-EQ": "Pharma",
+    "HINDUNILVR-EQ": "FMCG",
+    "NESTLEIND-EQ": "FMCG",
+    "BRITANNIA-EQ": "FMCG",
+    "DABUR-EQ": "FMCG",
+    "MARICO-EQ": "FMCG",
+    "TATAMOTORS-EQ": "Automobile",
+    "MARUTI-EQ": "Automobile",
+    "EICHERMOT-EQ": "Automobile",
+    "HEROMOTOCO-EQ": "Automobile",
+    "BAJAJ-AUTO-EQ": "Automobile",
+    "LT-EQ": "Infrastructure",
+    "ADANIPORTS-EQ": "Infrastructure",
+    "ULTRACEMCO-EQ": "Infrastructure",
+    "GRASIM-EQ": "Infrastructure",
+    "POWERGRID-EQ": "Utilities",
+    "NTPC-EQ": "Utilities",
+    "TATAPOWER-EQ": "Utilities",
+    "TITAN-EQ": "Consumer Goods",
+    "ASIANPAINT-EQ": "Consumer Goods",
+    "TATASTEEL-EQ": "Metals",
+    "HINDALCO-EQ": "Metals",
+    "JSWSTEEL-EQ": "Metals",
+}
 
 # ---------------------------------------------------------------------------
 # ML predictor — loaded once at module level so the heavy artifacts stay in
@@ -59,6 +120,7 @@ def portfolio_view(request):
     """
     portfolio = []
     error_message = None
+    historical_charts: dict = {}
 
     try:
         from data_ingestion.angel_one_api import AngelOneClient
@@ -75,7 +137,7 @@ def portfolio_view(request):
                     symbol = record.get("symbol", "")
                     token = record.get("symboltoken", "")
                     now = timezone.now()
-                    from_date = (now - timedelta(days=30)).strftime(
+                    from_date = (now - timedelta(days=_HISTORICAL_DAYS)).strftime(
                         f"%Y-%m-%d {_MARKET_OPEN_TIME}"
                     )
                     to_date = now.strftime(
@@ -93,6 +155,16 @@ def portfolio_view(request):
                             hist_df, sentiment_score=0.0
                         )
                         ai_signal = f"{prob:.2f}"
+                        # Store historical close prices for front-end drill-down.
+                        historical_charts[symbol] = {
+                            "dates": [
+                                str(ts.date()) for ts in hist_df["timestamp"]
+                            ],
+                            "closes": [
+                                round(float(c), 2)
+                                for c in hist_df["close"].fillna(0)
+                            ],
+                        }
                 except Exception:
                     logger.warning(
                         "AI prediction failed for %s; using fallback.",
@@ -100,6 +172,12 @@ def portfolio_view(request):
                         exc_info=True,
                     )
             record["ai_signal"] = ai_signal
+            record["ai_signal_float"] = (
+                float(ai_signal) if ai_signal != "Analyzing..." else None
+            )
+            record["market_value"] = round(
+                float(record.get("quantity", 0)) * float(record.get("avg_price", 0.0)), 2
+            )
 
         today = timezone.now().date()
         existing_symbols = set(
@@ -127,6 +205,9 @@ def portfolio_view(request):
             "Please check your API credentials and try again later."
         )
 
+    # -----------------------------------------------------------------------
+    # Portfolio Net-Worth history chart (from persisted snapshots)
+    # -----------------------------------------------------------------------
     snapshot_qs = (
         PortfolioSnapshot.objects.annotate(date=TruncDate("timestamp"))
         .values("date")
@@ -148,6 +229,23 @@ def portfolio_view(request):
         [round(entry["total_value"] or 0, 2) for entry in snapshot_qs]
     )
 
+    # -----------------------------------------------------------------------
+    # Sector Allocation doughnut chart data
+    # -----------------------------------------------------------------------
+    sector_totals: dict = {}
+    for record in portfolio:
+        sym = record.get("symbol", "")
+        sector = _SECTOR_MAP.get(sym, "Other")
+        sector_totals[sector] = sector_totals.get(sector, 0.0) + record.get("market_value", 0.0)
+
+    sector_labels = json.dumps(list(sector_totals.keys()))
+    sector_values = json.dumps([round(v, 2) for v in sector_totals.values()])
+
+    # -----------------------------------------------------------------------
+    # Historical per-stock close-price data for the JS drill-down modal
+    # -----------------------------------------------------------------------
+    historical_charts_json = json.dumps(historical_charts)
+
     return render(
         request,
         "dashboard/portfolio.html",
@@ -156,6 +254,9 @@ def portfolio_view(request):
             "error_message": error_message,
             "chart_labels": chart_labels,
             "chart_values": chart_values,
+            "sector_labels": sector_labels,
+            "sector_values": sector_values,
+            "historical_charts_json": historical_charts_json,
         },
     )
 
