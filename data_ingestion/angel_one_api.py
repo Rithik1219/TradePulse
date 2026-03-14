@@ -1,7 +1,7 @@
 """
 data_ingestion/angel_one_api.py
 ===============================
-Angel One SmartAPI integration for TradePulse — Phase 2.
+Angel One SmartAPI integration for TradePulse — Phase 2 / Phase 5.
 
 Responsibilities
 ----------------
@@ -12,6 +12,9 @@ Responsibilities
    *positions* from Angel One.
 3. **Data Formatting** — Merge both datasets into a single, clean
    ``pandas.DataFrame`` ready for downstream ML pipelines.
+4. **Historical OHLCV Data** — Fetch candlestick (OHLCV) data for a
+   given symbol using the ``getCandleData`` endpoint, returning a
+   ``pandas.DataFrame`` shaped for the LSTM/XGBoost training pipeline.
 
 Environment Variables Required
 ------------------------------
@@ -40,6 +43,7 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 import pyotp
+import requests
 from dotenv import load_dotenv
 from SmartApi.smartConnect import SmartConnect
 
@@ -252,6 +256,127 @@ class AngelOneClient:
         df["avg_price"] = price_numeric.fillna(0.0)
 
         logger.info("Portfolio DataFrame built — %d rows.", len(df))
+        return df
+
+    def get_historical_data(
+        self,
+        symbol: str,
+        token: str,
+        exchange: str = "NSE",
+        interval: str = "ONE_DAY",
+        from_date: str = "",
+        to_date: str = "",
+    ) -> pd.DataFrame:
+        """Fetch historical OHLCV candlestick data for a symbol.
+
+        Uses the Angel One SmartAPI ``getCandleData`` endpoint to retrieve
+        OHLCV bars for the requested time range.  The returned
+        :class:`pandas.DataFrame` is shaped to match what the ML pipeline
+        (``FeaturePreprocessor`` / ``LSTMModel``) expects:
+
+        Columns: ``timestamp``, ``open``, ``high``, ``low``, ``close``,
+        ``volume``.
+
+        Parameters
+        ----------
+        symbol : str
+            Trading symbol (e.g. ``"TCS"``).  Used only for logging.
+        token : str
+            Angel One instrument token for the symbol (e.g. ``"11536"``).
+        exchange : str, optional
+            Exchange code.  Defaults to ``"NSE"``.
+        interval : str, optional
+            Candle interval as accepted by the API.  Common values:
+            ``"ONE_MINUTE"``, ``"FIVE_MINUTE"``, ``"ONE_DAY"``.
+            Defaults to ``"ONE_DAY"``.
+        from_date : str
+            Start of the requested window in the format expected by the
+            SmartAPI (``"YYYY-MM-DD HH:MM"`` for intraday, or
+            ``"YYYY-MM-DD"`` for daily).
+        to_date : str
+            End of the requested window (same format as ``from_date``).
+
+        Returns
+        -------
+        pd.DataFrame
+            Columns: ``timestamp`` (datetime), ``open``, ``high``,
+            ``low``, ``close`` (float64), ``volume`` (int64).
+            An **empty** DataFrame with these columns is returned when the
+            API reports no data for the requested range.
+
+        Raises
+        ------
+        RuntimeError
+            If called before a successful :py:meth:`login`.
+        requests.exceptions.Timeout
+            Re-raised when the underlying HTTP request times out so the
+            caller can implement its own retry / back-off strategy.
+        """
+        if self.smart_api is None or self.auth_token is None:
+            raise RuntimeError(
+                "Not authenticated. Call login() before get_historical_data()."
+            )
+
+        _OHLCV_COLUMNS = ["timestamp", "open", "high", "low", "close", "volume"]
+        _EMPTY_DF = pd.DataFrame(columns=_OHLCV_COLUMNS)
+
+        historic_param = {
+            "exchange": exchange,
+            "symboltoken": token,
+            "interval": interval,
+            "fromdate": from_date,
+            "todate": to_date,
+        }
+
+        logger.info(
+            "Fetching historical data for %s (%s) from %s to %s [interval=%s].",
+            symbol,
+            token,
+            from_date,
+            to_date,
+            interval,
+        )
+
+        try:
+            response = self.smart_api.getCandleData(historic_param)
+        except requests.exceptions.Timeout:
+            logger.error(
+                "Historical data request for %s timed out. "
+                "Consider retrying with a shorter date range.",
+                symbol,
+            )
+            raise
+        except Exception:
+            logger.exception(
+                "Unexpected error fetching historical data for %s.", symbol
+            )
+            return _EMPTY_DF
+
+        if not response or not response.get("status"):
+            message = (response or {}).get("message", "Unknown error")
+            logger.warning(
+                "Historical data API returned an error for %s: %s", symbol, message
+            )
+            return _EMPTY_DF
+
+        candles: List[Any] = (response.get("data") or [])
+        if not candles:
+            logger.info("No candle data returned for %s in the requested range.", symbol)
+            return _EMPTY_DF
+
+        df = pd.DataFrame(candles, columns=_OHLCV_COLUMNS)
+        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+        # Keep NaN for unparseable price values so downstream consumers can
+        # detect and handle bad ticks rather than silently treating them as 0.
+        for col in ("open", "high", "low", "close"):
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+        df["volume"] = (
+            pd.to_numeric(df["volume"], errors="coerce").fillna(0).astype(int)
+        )
+
+        logger.info(
+            "Historical DataFrame for %s built — %d rows.", symbol, len(df)
+        )
         return df
 
 
