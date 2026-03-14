@@ -1,6 +1,5 @@
 from unittest.mock import MagicMock, patch
 import json
-import re
 
 import pandas as pd
 from django.test import TestCase, RequestFactory
@@ -17,7 +16,7 @@ class PortfolioViewTests(TestCase):
 
     @patch("dashboard.views.AngelOneClient", create=True)
     def test_portfolio_view_renders_with_data(self, mock_import):
-        """View renders portfolio data when API succeeds."""
+        """View returns portfolio data as JSON when API succeeds."""
         # We need to patch the import inside the function
         sample_df = pd.DataFrame([
             {"symbol": "TCS", "quantity": 10, "avg_price": 3500.0, "source": "holdings"},
@@ -39,14 +38,17 @@ class PortfolioViewTests(TestCase):
                 response = portfolio_view(request)
 
         self.assertEqual(response.status_code, 200)
-        content = response.content.decode()
-        self.assertIn("TCS", content)
-        self.assertIn("INFY", content)
-        self.assertIn("3500", content)
-        self.assertIn("holdings", content)
+        self.assertEqual(response["Content-Type"], "application/json")
+        data = json.loads(response.content)
+        symbols = [r["symbol"] for r in data["portfolio"]]
+        self.assertIn("TCS", symbols)
+        self.assertIn("INFY", symbols)
+        tcs = next(r for r in data["portfolio"] if r["symbol"] == "TCS")
+        self.assertEqual(tcs["avg_price"], 3500.0)
+        self.assertEqual(tcs["source"], "holdings")
 
     def test_portfolio_view_handles_api_error(self):
-        """View renders error message when API fails."""
+        """View returns JSON error message when API fails."""
         with patch.dict("sys.modules", {
             "data_ingestion": MagicMock(),
             "data_ingestion.angel_one_api": MagicMock(
@@ -57,11 +59,12 @@ class PortfolioViewTests(TestCase):
             response = portfolio_view(request)
 
         self.assertEqual(response.status_code, 200)
-        content = response.content.decode()
-        self.assertIn("Unable to retrieve portfolio data", content)
+        self.assertEqual(response["Content-Type"], "application/json")
+        data = json.loads(response.content)
+        self.assertIn("Unable to retrieve portfolio data", data["error_message"])
 
-    def test_portfolio_view_uses_correct_template(self):
-        """View uses the portfolio.html template."""
+    def test_portfolio_view_returns_json_response(self):
+        """View returns a JSON response with the expected top-level keys."""
         with patch.dict("sys.modules", {
             "data_ingestion": MagicMock(),
             "data_ingestion.angel_one_api": MagicMock(
@@ -72,9 +75,11 @@ class PortfolioViewTests(TestCase):
             response = portfolio_view(request)
 
         self.assertEqual(response.status_code, 200)
-        content = response.content.decode()
-        self.assertIn("TradePulse", content)
-        self.assertIn("Live Portfolio", content)
+        self.assertEqual(response["Content-Type"], "application/json")
+        data = json.loads(response.content)
+        for key in ("portfolio", "error_message", "chart_labels", "chart_values",
+                    "sector_labels", "sector_values", "historical_charts_json"):
+            self.assertIn(key, data)
 
 
 class PortfolioSnapshotModelTests(TestCase):
@@ -180,7 +185,7 @@ class PortfolioChartDataTests(TestCase):
     """Tests for chart_labels and chart_values passed to portfolio template."""
 
     def test_chart_data_included_in_context(self):
-        """chart_labels and chart_values are valid JSON in the rendered response."""
+        """chart_labels and chart_values are present and valid JSON strings in the response."""
         PortfolioSnapshot.objects.create(
             symbol="TCS", quantity=10, avg_price=3500.0, source="holdings"
         )
@@ -197,12 +202,14 @@ class PortfolioChartDataTests(TestCase):
             request = RequestFactory().get("/")
             response = portfolio_view(request)
 
-        content = response.content.decode()
-        # Both JSON arrays must appear in the rendered page
-        self.assertIn("portfolioChart", content)
-        # The labels should contain today's date
+        self.assertEqual(response["Content-Type"], "application/json")
+        data = json.loads(response.content)
+        self.assertIn("chart_labels", data)
+        self.assertIn("chart_values", data)
+        # chart_labels is a JSON-encoded string; parse it and verify today's date is present
+        labels = json.loads(data["chart_labels"])
         today_str = timezone.now().date().strftime("%Y-%m-%d")
-        self.assertIn(today_str, content)
+        self.assertIn(today_str, labels)
 
     def test_chart_values_reflect_total_portfolio_value(self):
         """chart_values contains sum of quantity*avg_price for each snapshot day."""
@@ -223,11 +230,8 @@ class PortfolioChartDataTests(TestCase):
             request = RequestFactory().get("/")
             response = portfolio_view(request)
 
-        content = response.content.decode()
-        # chart_values is rendered as a JSON array; extract and parse it
-        match = re.search(r'const values = (\[.*?\]);', content)
-        self.assertIsNotNone(match, "chart_values not found in rendered content")
-        parsed_values = json.loads(match.group(1))
+        data = json.loads(response.content)
+        parsed_values = json.loads(data["chart_values"])
         self.assertEqual(parsed_values, [42500.0])
 
     def test_chart_data_empty_when_no_snapshots(self):
@@ -241,13 +245,9 @@ class PortfolioChartDataTests(TestCase):
             request = RequestFactory().get("/")
             response = portfolio_view(request)
 
-        content = response.content.decode()
-        labels_match = re.search(r'const labels = (\[.*?\]);', content)
-        values_match = re.search(r'const values = (\[.*?\]);', content)
-        self.assertIsNotNone(labels_match, "chart_labels not found in rendered content")
-        self.assertIsNotNone(values_match, "chart_values not found in rendered content")
-        self.assertEqual(json.loads(labels_match.group(1)), [])
-        self.assertEqual(json.loads(values_match.group(1)), [])
+        data = json.loads(response.content)
+        self.assertEqual(json.loads(data["chart_labels"]), [])
+        self.assertEqual(json.loads(data["chart_values"]), [])
 
 
 class AiSignalTests(TestCase):
@@ -261,7 +261,7 @@ class AiSignalTests(TestCase):
         return MockClient
 
     def test_ai_signal_present_in_portfolio_records(self):
-        """Each portfolio record includes an 'ai_signal' key."""
+        """Each portfolio record in the JSON response includes an 'ai_signal' key."""
         sample_df = pd.DataFrame([
             {"symbol": "TCS", "quantity": 10, "avg_price": 3500.0, "source": "holdings"},
             {"symbol": "INFY", "quantity": 5, "avg_price": 1500.0, "source": "positions"},
@@ -275,12 +275,14 @@ class AiSignalTests(TestCase):
             request = RequestFactory().get("/")
             response = portfolio_view(request)
 
-        content = response.content.decode()
-        self.assertIn("AI Prediction", content)
-        self.assertIn("Analyzing...", content)
+        self.assertEqual(response["Content-Type"], "application/json")
+        data = json.loads(response.content)
+        for record in data["portfolio"]:
+            self.assertIn("ai_signal", record)
+            self.assertEqual(record["ai_signal"], "Analyzing...")
 
     def test_ai_signal_column_present_in_table_header(self):
-        """The 'AI Prediction' column header is rendered in the portfolio table."""
+        """The JSON response portfolio records include an 'ai_signal' field."""
         sample_df = pd.DataFrame([
             {"symbol": "TCS", "quantity": 10, "avg_price": 3500.0, "source": "holdings"},
         ])
@@ -293,11 +295,12 @@ class AiSignalTests(TestCase):
             request = RequestFactory().get("/")
             response = portfolio_view(request)
 
-        content = response.content.decode()
-        self.assertIn("AI Prediction", content)
+        data = json.loads(response.content)
+        self.assertTrue(len(data["portfolio"]) > 0)
+        self.assertIn("ai_signal", data["portfolio"][0])
 
     def test_ai_signal_badge_rendered_for_each_row(self):
-        """An 'Analyzing...' badge appears once per portfolio row."""
+        """Each portfolio record in the JSON response has an 'ai_signal' value."""
         sample_df = pd.DataFrame([
             {"symbol": "TCS", "quantity": 10, "avg_price": 3500.0, "source": "holdings"},
             {"symbol": "INFY", "quantity": 5, "avg_price": 1500.0, "source": "positions"},
@@ -312,8 +315,11 @@ class AiSignalTests(TestCase):
             request = RequestFactory().get("/")
             response = portfolio_view(request)
 
-        content = response.content.decode()
-        self.assertEqual(content.count("Analyzing..."), 3)
+        data = json.loads(response.content)
+        analyzing_count = sum(
+            1 for r in data["portfolio"] if r.get("ai_signal") == "Analyzing..."
+        )
+        self.assertEqual(analyzing_count, 3)
 
 
 class GetHistoricalDataTests(TestCase):

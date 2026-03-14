@@ -7,6 +7,7 @@ from datetime import timedelta
 from django.db.models import FloatField, Sum
 from django.db.models.expressions import ExpressionWrapper, F
 from django.db.models.functions import TruncDate
+from django.http import JsonResponse
 from django.shortcuts import render
 from django.utils import timezone
 
@@ -246,9 +247,7 @@ def portfolio_view(request):
     # -----------------------------------------------------------------------
     historical_charts_json = json.dumps(historical_charts)
 
-    return render(
-        request,
-        "dashboard/portfolio.html",
+    return JsonResponse(
         {
             "portfolio": portfolio,
             "error_message": error_message,
@@ -258,5 +257,6 @@ def portfolio_view(request):
             "sector_values": sector_values,
             "historical_charts_json": historical_charts_json,
         },
+        safe=False,
     )
 
