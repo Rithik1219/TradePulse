@@ -65,6 +65,10 @@ _POSITIONS_COLUMNS = {
     "averageprice": "avg_price",
 }
 
+_SCRIP_MASTER_URL = (
+    "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
+)
+
 
 # ---------------------------------------------------------------------------
 # Client
@@ -98,6 +102,8 @@ class AngelOneClient:
 
         self.smart_api: Optional[SmartConnect] = None
         self.auth_token: Optional[str] = None
+        self._scrip_master_cache: Optional[List[Dict[str, Any]]] = None
+        self._symbol_token_map: Optional[Dict[str, str]] = None
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -163,6 +169,67 @@ class AngelOneClient:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    def _fetch_scrip_master(self) -> List[Dict[str, Any]]:
+        """Fetch and cache the Angel One Scrip Master instrument list.
+
+        Downloads the official scrip master JSON from Angel One on the
+        first call and caches both the raw list and a ``symbol → token``
+        lookup dict in ``self._scrip_master_cache`` /
+        ``self._symbol_token_map`` for all subsequent calls within the
+        same session.
+
+        Returns
+        -------
+        list[dict]
+            The full list of scrip records.  Returns an empty list when
+            the download fails so callers can degrade gracefully.
+        """
+        if self._scrip_master_cache is not None:
+            return self._scrip_master_cache
+
+        try:
+            response = requests.get(_SCRIP_MASTER_URL, timeout=30)
+            response.raise_for_status()
+            self._scrip_master_cache = response.json()
+            self._symbol_token_map = {
+                entry["symbol"]: str(entry.get("token", ""))
+                for entry in self._scrip_master_cache
+                if entry.get("symbol")
+            }
+            logger.info(
+                "Scrip master loaded — %d instruments.", len(self._scrip_master_cache)
+            )
+        except Exception:
+            logger.exception("Failed to fetch Angel One scrip master.")
+            self._scrip_master_cache = []
+            self._symbol_token_map = {}
+
+        return self._scrip_master_cache
+
+    def get_token_from_symbol(self, symbol: str) -> str:
+        """Return the numeric instrument token for a trading symbol.
+
+        Searches the cached Scrip Master for an entry whose
+        ``symbol`` field matches *symbol* (e.g. ``"RELIANCE-EQ"``) and
+        returns its ``token`` value as a string.
+
+        Parameters
+        ----------
+        symbol : str
+            The trading symbol to look up (e.g. ``"RELIANCE-EQ"``).
+
+        Returns
+        -------
+        str
+            The corresponding instrument token, or an empty string when
+            the symbol is not found in the scrip master.
+        """
+        self._fetch_scrip_master()
+        token = (self._symbol_token_map or {}).get(symbol, "")
+        if not token:
+            logger.warning("Symbol '%s' not found in Angel One scrip master.", symbol)
+        return token
 
     def login(self) -> None:
         """Authenticate with Angel One and store the session token.
@@ -280,9 +347,13 @@ class AngelOneClient:
         Parameters
         ----------
         symbol : str
-            Trading symbol (e.g. ``"TCS"``).  Used only for logging.
+            Trading symbol (e.g. ``"TCS-EQ"``).  When *token* is empty
+            this is also used to look up the correct instrument token via
+            :py:meth:`get_token_from_symbol`.
         token : str
             Angel One instrument token for the symbol (e.g. ``"11536"``).
+            Pass an empty string to have the token resolved automatically
+            from the scrip master using *symbol*.
         exchange : str, optional
             Exchange code.  Defaults to ``"NSE"``.
         interval : str, optional
@@ -319,6 +390,16 @@ class AngelOneClient:
 
         _OHLCV_COLUMNS = ["timestamp", "open", "high", "low", "close", "volume"]
         _EMPTY_DF = pd.DataFrame(columns=_OHLCV_COLUMNS)
+
+        # Resolve token from scrip master when none is supplied.
+        if not token:
+            token = self.get_token_from_symbol(symbol)
+            if not token:
+                logger.warning(
+                    "Could not resolve token for symbol '%s'; skipping request.",
+                    symbol,
+                )
+                return _EMPTY_DF
 
         historic_param = {
             "exchange": exchange,

@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 
 from datetime import timedelta
 
@@ -19,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 _MARKET_OPEN_TIME = "09:15"
 _MARKET_CLOSE_TIME = "15:30"
+_ANGEL_ONE_REQUEST_DELAY = 0.5  # seconds — stay under 3 req/s rate limit
 
 # ---------------------------------------------------------------------------
 # ML predictor — loaded once at module level so the heavy artifacts stay in
@@ -85,6 +87,7 @@ def portfolio_view(request):
                         from_date=from_date,
                         to_date=to_date,
                     )
+                    time.sleep(_ANGEL_ONE_REQUEST_DELAY)
                     if not hist_df.empty:
                         prob = _predictor.predict_signal(
                             hist_df, sentiment_score=0.0
