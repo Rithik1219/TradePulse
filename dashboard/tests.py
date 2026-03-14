@@ -1,4 +1,6 @@
 from unittest.mock import MagicMock, patch
+import json
+import re
 
 import pandas as pd
 from django.test import TestCase, RequestFactory
@@ -6,7 +8,6 @@ from django.utils import timezone
 
 from dashboard.models import PortfolioSnapshot
 from dashboard.views import portfolio_view
-
 
 class PortfolioViewTests(TestCase):
     """Tests for the portfolio_view."""
@@ -173,4 +174,78 @@ class PortfolioSnapshotDedupTests(TestCase):
             portfolio_view(RequestFactory().get("/"))
 
         self.assertEqual(PortfolioSnapshot.objects.filter(symbol="WIPRO").count(), 2)
+
+
+class PortfolioChartDataTests(TestCase):
+    """Tests for chart_labels and chart_values passed to portfolio template."""
+
+    def test_chart_data_included_in_context(self):
+        """chart_labels and chart_values are valid JSON in the rendered response."""
+        PortfolioSnapshot.objects.create(
+            symbol="TCS", quantity=10, avg_price=3500.0, source="holdings"
+        )
+        PortfolioSnapshot.objects.create(
+            symbol="INFY", quantity=5, avg_price=1500.0, source="positions"
+        )
+
+        with patch.dict("sys.modules", {
+            "data_ingestion": MagicMock(),
+            "data_ingestion.angel_one_api": MagicMock(
+                AngelOneClient=MagicMock(side_effect=Exception("no api"))
+            ),
+        }):
+            request = RequestFactory().get("/")
+            response = portfolio_view(request)
+
+        content = response.content.decode()
+        # Both JSON arrays must appear in the rendered page
+        self.assertIn("portfolioChart", content)
+        # The labels should contain today's date
+        today_str = timezone.now().date().strftime("%Y-%m-%d")
+        self.assertIn(today_str, content)
+
+    def test_chart_values_reflect_total_portfolio_value(self):
+        """chart_values contains sum of quantity*avg_price for each snapshot day."""
+        PortfolioSnapshot.objects.create(
+            symbol="TCS", quantity=10, avg_price=3500.0, source="holdings"
+        )
+        PortfolioSnapshot.objects.create(
+            symbol="INFY", quantity=5, avg_price=1500.0, source="positions"
+        )
+        # Expected total: 10*3500 + 5*1500 = 35000 + 7500 = 42500
+
+        with patch.dict("sys.modules", {
+            "data_ingestion": MagicMock(),
+            "data_ingestion.angel_one_api": MagicMock(
+                AngelOneClient=MagicMock(side_effect=Exception("no api"))
+            ),
+        }):
+            request = RequestFactory().get("/")
+            response = portfolio_view(request)
+
+        content = response.content.decode()
+        # chart_values is rendered as a JSON array; extract and parse it
+        match = re.search(r'const values = (\[.*?\]);', content)
+        self.assertIsNotNone(match, "chart_values not found in rendered content")
+        parsed_values = json.loads(match.group(1))
+        self.assertEqual(parsed_values, [42500.0])
+
+    def test_chart_data_empty_when_no_snapshots(self):
+        """chart_labels and chart_values are empty JSON arrays when no snapshots exist."""
+        with patch.dict("sys.modules", {
+            "data_ingestion": MagicMock(),
+            "data_ingestion.angel_one_api": MagicMock(
+                AngelOneClient=MagicMock(side_effect=Exception("no api"))
+            ),
+        }):
+            request = RequestFactory().get("/")
+            response = portfolio_view(request)
+
+        content = response.content.decode()
+        labels_match = re.search(r'const labels = (\[.*?\]);', content)
+        values_match = re.search(r'const values = (\[.*?\]);', content)
+        self.assertIsNotNone(labels_match, "chart_labels not found in rendered content")
+        self.assertIsNotNone(values_match, "chart_values not found in rendered content")
+        self.assertEqual(json.loads(labels_match.group(1)), [])
+        self.assertEqual(json.loads(values_match.group(1)), [])
 

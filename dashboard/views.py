@@ -1,5 +1,9 @@
+import json
 import logging
 
+from django.db.models import FloatField, Sum
+from django.db.models.expressions import ExpressionWrapper, F
+from django.db.models.functions import TruncDate
 from django.shortcuts import render
 from django.utils import timezone
 
@@ -62,9 +66,35 @@ def portfolio_view(request):
             "Please check your API credentials and try again later."
         )
 
+    snapshot_qs = (
+        PortfolioSnapshot.objects.annotate(date=TruncDate("timestamp"))
+        .values("date")
+        .annotate(
+            total_value=Sum(
+                ExpressionWrapper(
+                    F("quantity") * F("avg_price"),
+                    output_field=FloatField(),
+                )
+            )
+        )
+        .order_by("date")
+    )
+
+    chart_labels = json.dumps(
+        [entry["date"].strftime("%Y-%m-%d") for entry in snapshot_qs]
+    )
+    chart_values = json.dumps(
+        [round(entry["total_value"] or 0, 2) for entry in snapshot_qs]
+    )
+
     return render(
         request,
         "dashboard/portfolio.html",
-        {"portfolio": portfolio, "error_message": error_message},
+        {
+            "portfolio": portfolio,
+            "error_message": error_message,
+            "chart_labels": chart_labels,
+            "chart_values": chart_values,
+        },
     )
 
