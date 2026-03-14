@@ -26,8 +26,6 @@ class PortfolioViewTests(TestCase):
             mock_instance.get_portfolio.return_value = sample_df
             MockClient.return_value = mock_instance
 
-            # Patch the import inside the view
-            import importlib
             with patch.dict("sys.modules", {
                 "data_ingestion": MagicMock(),
                 "data_ingestion.angel_one_api": MagicMock(AngelOneClient=MockClient),
