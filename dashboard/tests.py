@@ -249,3 +249,229 @@ class PortfolioChartDataTests(TestCase):
         self.assertEqual(json.loads(labels_match.group(1)), [])
         self.assertEqual(json.loads(values_match.group(1)), [])
 
+
+class AiSignalTests(TestCase):
+    """Tests for the ai_signal placeholder added to each portfolio row."""
+
+    def _make_mock_client(self, df):
+        MockClient = MagicMock()
+        mock_instance = MagicMock()
+        mock_instance.get_portfolio.return_value = df
+        MockClient.return_value = mock_instance
+        return MockClient
+
+    def test_ai_signal_present_in_portfolio_records(self):
+        """Each portfolio record includes an 'ai_signal' key."""
+        sample_df = pd.DataFrame([
+            {"symbol": "TCS", "quantity": 10, "avg_price": 3500.0, "source": "holdings"},
+            {"symbol": "INFY", "quantity": 5, "avg_price": 1500.0, "source": "positions"},
+        ])
+        MockClient = self._make_mock_client(sample_df)
+
+        with patch.dict("sys.modules", {
+            "data_ingestion": MagicMock(),
+            "data_ingestion.angel_one_api": MagicMock(AngelOneClient=MockClient),
+        }):
+            request = RequestFactory().get("/")
+            response = portfolio_view(request)
+
+        content = response.content.decode()
+        self.assertIn("AI Prediction", content)
+        self.assertIn("Analyzing...", content)
+
+    def test_ai_signal_column_present_in_table_header(self):
+        """The 'AI Prediction' column header is rendered in the portfolio table."""
+        sample_df = pd.DataFrame([
+            {"symbol": "TCS", "quantity": 10, "avg_price": 3500.0, "source": "holdings"},
+        ])
+        MockClient = self._make_mock_client(sample_df)
+
+        with patch.dict("sys.modules", {
+            "data_ingestion": MagicMock(),
+            "data_ingestion.angel_one_api": MagicMock(AngelOneClient=MockClient),
+        }):
+            request = RequestFactory().get("/")
+            response = portfolio_view(request)
+
+        content = response.content.decode()
+        self.assertIn("AI Prediction", content)
+
+    def test_ai_signal_badge_rendered_for_each_row(self):
+        """An 'Analyzing...' badge appears once per portfolio row."""
+        sample_df = pd.DataFrame([
+            {"symbol": "TCS", "quantity": 10, "avg_price": 3500.0, "source": "holdings"},
+            {"symbol": "INFY", "quantity": 5, "avg_price": 1500.0, "source": "positions"},
+            {"symbol": "WIPRO", "quantity": 8, "avg_price": 420.0, "source": "holdings"},
+        ])
+        MockClient = self._make_mock_client(sample_df)
+
+        with patch.dict("sys.modules", {
+            "data_ingestion": MagicMock(),
+            "data_ingestion.angel_one_api": MagicMock(AngelOneClient=MockClient),
+        }):
+            request = RequestFactory().get("/")
+            response = portfolio_view(request)
+
+        content = response.content.decode()
+        self.assertEqual(content.count("Analyzing..."), 3)
+
+
+class GetHistoricalDataTests(TestCase):
+    """Tests for AngelOneClient.get_historical_data."""
+
+    def _make_client(self):
+        """Return a partially-mocked AngelOneClient that is already 'logged in'."""
+        smart_api_mock = MagicMock()
+        smart_connect_mock = MagicMock(return_value=smart_api_mock)
+        with patch.dict("sys.modules", {
+            "SmartApi": MagicMock(),
+            "SmartApi.smartConnect": MagicMock(SmartConnect=smart_connect_mock),
+        }), patch.dict("os.environ", {
+            "ANGEL_API_KEY": "key",
+            "ANGEL_CLIENT_ID": "client",
+            "ANGEL_PIN": "pin",
+            "ANGEL_TOTP_SECRET": "JBSWY3DPEHPK3PXP",
+        }):
+            from importlib import import_module, reload
+            import data_ingestion.angel_one_api as api_module
+            reload(api_module)
+            client = api_module.AngelOneClient()
+        client.smart_api = MagicMock()
+        client.auth_token = "fake_token"
+        return client
+
+    def test_returns_ohlcv_dataframe_on_success(self):
+        """get_historical_data returns a DataFrame with OHLCV columns on success."""
+        client = self._make_client()
+        candle_data = [
+            ["2024-01-01T09:15:00+05:30", 3500.0, 3550.0, 3490.0, 3520.0, 100000],
+            ["2024-01-02T09:15:00+05:30", 3520.0, 3600.0, 3510.0, 3580.0, 120000],
+        ]
+        client.smart_api.getCandleData.return_value = {
+            "status": True,
+            "message": "SUCCESS",
+            "data": candle_data,
+        }
+
+        df = client.get_historical_data(
+            symbol="TCS",
+            token="11536",
+            from_date="2024-01-01 09:15",
+            to_date="2024-01-02 15:30",
+        )
+
+        self.assertListEqual(list(df.columns), ["timestamp", "open", "high", "low", "close", "volume"])
+        self.assertEqual(len(df), 2)
+        self.assertAlmostEqual(df.iloc[0]["open"], 3500.0)
+        self.assertAlmostEqual(df.iloc[1]["close"], 3580.0)
+        self.assertEqual(df.iloc[0]["volume"], 100000)
+
+    def test_raises_runtime_error_when_not_logged_in(self):
+        """get_historical_data raises RuntimeError if called before login."""
+        with patch.dict("sys.modules", {
+            "SmartApi": MagicMock(),
+            "SmartApi.smartConnect": MagicMock(),
+        }), patch.dict("os.environ", {
+            "ANGEL_API_KEY": "key",
+            "ANGEL_CLIENT_ID": "client",
+            "ANGEL_PIN": "pin",
+            "ANGEL_TOTP_SECRET": "JBSWY3DPEHPK3PXP",
+        }):
+            from importlib import reload
+            import data_ingestion.angel_one_api as api_module
+            reload(api_module)
+            client = api_module.AngelOneClient()
+
+        with self.assertRaises(RuntimeError):
+            client.get_historical_data(
+                symbol="TCS",
+                token="11536",
+                from_date="2024-01-01",
+                to_date="2024-01-02",
+            )
+
+    def test_returns_empty_dataframe_on_api_error(self):
+        """get_historical_data returns an empty DataFrame when the API reports failure."""
+        client = self._make_client()
+        client.smart_api.getCandleData.return_value = {
+            "status": False,
+            "message": "Invalid token",
+            "data": None,
+        }
+
+        df = client.get_historical_data(
+            symbol="TCS",
+            token="BADTOKEN",
+            from_date="2024-01-01",
+            to_date="2024-01-02",
+        )
+
+        self.assertTrue(df.empty)
+        self.assertListEqual(list(df.columns), ["timestamp", "open", "high", "low", "close", "volume"])
+
+    def test_returns_empty_dataframe_on_no_candle_data(self):
+        """get_historical_data returns an empty DataFrame when data list is empty."""
+        client = self._make_client()
+        client.smart_api.getCandleData.return_value = {
+            "status": True,
+            "message": "SUCCESS",
+            "data": [],
+        }
+
+        df = client.get_historical_data(
+            symbol="TCS",
+            token="11536",
+            from_date="2024-01-01",
+            to_date="2024-01-01",
+        )
+
+        self.assertTrue(df.empty)
+
+    def test_raises_timeout_on_requests_timeout(self):
+        """get_historical_data re-raises requests.exceptions.Timeout."""
+        import requests
+        client = self._make_client()
+        client.smart_api.getCandleData.side_effect = requests.exceptions.Timeout("timed out")
+
+        with self.assertRaises(requests.exceptions.Timeout):
+            client.get_historical_data(
+                symbol="TCS",
+                token="11536",
+                from_date="2024-01-01",
+                to_date="2024-01-31",
+            )
+
+    def test_returns_empty_dataframe_on_unexpected_exception(self):
+        """get_historical_data returns empty DataFrame for non-timeout exceptions."""
+        client = self._make_client()
+        client.smart_api.getCandleData.side_effect = ValueError("unexpected")
+
+        df = client.get_historical_data(
+            symbol="TCS",
+            token="11536",
+            from_date="2024-01-01",
+            to_date="2024-01-31",
+        )
+
+        self.assertTrue(df.empty)
+
+    def test_default_exchange_and_interval(self):
+        """get_historical_data passes NSE and ONE_DAY defaults to the API."""
+        client = self._make_client()
+        client.smart_api.getCandleData.return_value = {
+            "status": True,
+            "message": "SUCCESS",
+            "data": [],
+        }
+
+        client.get_historical_data(
+            symbol="TCS",
+            token="11536",
+            from_date="2024-01-01",
+            to_date="2024-01-31",
+        )
+
+        call_args = client.smart_api.getCandleData.call_args[0][0]
+        self.assertEqual(call_args["exchange"], "NSE")
+        self.assertEqual(call_args["interval"], "ONE_DAY")
+

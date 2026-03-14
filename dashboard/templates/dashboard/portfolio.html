@@ -85,6 +85,7 @@
                     <th scope="col">Quantity</th>
                     <th scope="col">Avg Price</th>
                     <th scope="col">Source</th>
+                    <th scope="col">AI Prediction</th>
                 </tr>
             </thead>
             <tbody>
@@ -96,6 +97,17 @@
                     <td>{{ stock.avg_price }}</td>
                     <td>
                         <span class="badge bg-info text-dark">{{ stock.source }}</span>
+                    </td>
+                    <td>
+                        {% if stock.ai_signal == "Analyzing..." %}
+                            <span class="badge bg-secondary">{{ stock.ai_signal }}</span>
+                        {% elif stock.ai_signal >= 0.6 %}
+                            <span class="badge bg-success">{{ stock.ai_signal }} 📈</span>
+                        {% elif stock.ai_signal <= 0.4 %}
+                            <span class="badge bg-danger">{{ stock.ai_signal }} 📉</span>
+                        {% else %}
+                            <span class="badge bg-warning text-dark">{{ stock.ai_signal }} ↔</span>
+                        {% endif %}
                     </td>
                 </tr>
                 {% endfor %}

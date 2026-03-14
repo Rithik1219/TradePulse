@@ -40,6 +40,9 @@ def portfolio_view(request):
         df = client.get_portfolio()
         portfolio = df.to_dict(orient="records")
 
+        for record in portfolio:
+            record["ai_signal"] = "Analyzing..."
+
         today = timezone.now().date()
         existing_symbols = set(
             PortfolioSnapshot.objects.filter(
