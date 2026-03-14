@@ -183,8 +183,8 @@ class TradePulsePredictorTests(unittest.TestCase):
             columns=feature_names,
         )
 
-        # Sequential tensor (OHLCV + sentiment = 6 channels)
-        X_seq = rng.standard_normal((n_samples, seq_len, 6)).astype(np.float32)
+        # Sequential tensor (OHLCV + daily_return + volatility = 7 channels)
+        X_seq = rng.standard_normal((n_samples, seq_len, 7)).astype(np.float32)
         y = (rng.random(n_samples) > 0.5).astype(np.float32)
 
         # Fit & save preprocessor
@@ -199,7 +199,7 @@ class TradePulsePredictorTests(unittest.TestCase):
 
         # Fit & save LSTM
         lstm = LSTMModel(
-            input_size=6, seq_len=seq_len, hidden_size=16,
+            input_size=7, seq_len=seq_len, hidden_size=16,
             num_layers=1, epochs=2, patience=2, random_state=42,
             device="cpu",
         )
@@ -227,7 +227,10 @@ class TradePulsePredictorTests(unittest.TestCase):
     def test_predict_signal_returns_float_in_range(self):
         predictor = TradePulsePredictor(model_dir=self.tmpdir)
 
-        # Build a mock OHLCV DataFrame with enough rows
+        # Build a mock OHLCV DataFrame with enough rows.
+        # After pct_change() + rolling(window=20), the first 20 rows become
+        # NaN and are dropped; we need at least seq_len rows remaining.
+        # seq_len=10 → supply 10 + 20 = 30 rows.
         rng = np.random.default_rng(99)
         hist_df = pd.DataFrame({
             "open": rng.uniform(100, 200, 30),

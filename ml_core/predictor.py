@@ -100,7 +100,7 @@ class TradePulsePredictor:
         """
         seq_len: int = self.lstm_model.seq_len
 
-        # ----- Build the LSTM 3-D tensor -----------------------------------
+        # ----- Validate required OHLCV columns ----------------------------
         ohlcv_cols = ["open", "high", "low", "close", "volume"]
         for col in ohlcv_cols:
             if col not in historical_ohlcv_df.columns:
@@ -109,18 +109,31 @@ class TradePulsePredictor:
                 )
 
         df = historical_ohlcv_df[ohlcv_cols].copy()
-        df["sentiment"] = sentiment_score
 
-        # Ensure we have enough rows
+        # ----- Engineer the same 7 features used during training ----------
+        # Training pipeline (yfinance_bulk_ingestion.py) sequences these
+        # columns: open, high, low, close, volume, daily_return, volatility.
+        # We must replicate that logic here to avoid a training-serving skew.
+        df["daily_return"] = df["close"].pct_change()
+        df["volatility"] = df["daily_return"].rolling(window=20).std()
+
+        # Drop NaN rows introduced by pct_change() and rolling(window=20)
+        df = df.dropna()
+
+        # Ensure we still have enough rows after NaN removal
         if len(df) < seq_len:
             raise ValueError(
                 f"Need at least {seq_len} rows of historical data, "
                 f"got {len(df)}."
             )
 
+        # Feature order must exactly match the training schema
+        lstm_cols = ["open", "high", "low", "close", "volume",
+                     "daily_return", "volatility"]
+
         # Take the most recent `seq_len` rows as a single sample
-        seq_data = df.iloc[-seq_len:].values.astype(np.float32)
-        X_seq = seq_data[np.newaxis, :, :]  # (1, seq_len, 6)
+        seq_data = df[lstm_cols].iloc[-seq_len:].values.astype(np.float32)
+        X_seq = seq_data[np.newaxis, :, :]  # (1, seq_len, 7)
 
         # ----- Build the tabular feature matrix for XGBoost ----------------
         # In production, raw technical indicators would be computed here.
