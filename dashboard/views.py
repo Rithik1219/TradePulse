@@ -14,6 +14,13 @@ from dashboard.models import PortfolioSnapshot
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+_MARKET_OPEN_TIME = "09:15"
+_MARKET_CLOSE_TIME = "15:30"
+
+# ---------------------------------------------------------------------------
 # ML predictor — loaded once at module level so the heavy artifacts stay in
 # memory for the lifetime of the server process.
 # ---------------------------------------------------------------------------
@@ -67,9 +74,11 @@ def portfolio_view(request):
                     token = record.get("symboltoken", "")
                     now = timezone.now()
                     from_date = (now - timedelta(days=30)).strftime(
-                        "%Y-%m-%d 09:15"
+                        f"%Y-%m-%d {_MARKET_OPEN_TIME}"
                     )
-                    to_date = now.strftime("%Y-%m-%d 15:30")
+                    to_date = now.strftime(
+                        f"%Y-%m-%d {_MARKET_CLOSE_TIME}"
+                    )
                     hist_df = client.get_historical_data(
                         symbol=symbol,
                         token=token,

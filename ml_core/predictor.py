@@ -99,7 +99,6 @@ class TradePulsePredictor:
             indicate a predicted UP move.
         """
         seq_len: int = self.lstm_model.seq_len
-        n_pca_features: int = self.preprocessor.n_components_ or 0
 
         # ----- Build the LSTM 3-D tensor -----------------------------------
         ohlcv_cols = ["open", "high", "low", "close", "volume"]
@@ -156,10 +155,14 @@ class TradePulsePredictor:
     ) -> np.ndarray:
         """Derive a fixed-length feature vector from OHLCV + sentiment.
 
-        This is a deterministic proxy for the full technical-indicator
-        computation used during training.  Each feature is derived from
-        rolling statistics of the available columns so that the values
-        are realistic and consistently scaled.
+        .. note::
+
+            **Placeholder implementation.**  In production this must be
+            replaced with the actual technical-indicator computation
+            (e.g. RSI, MACD, Bollinger Bands, etc.) that was used during
+            training.  The current version generates a deterministic
+            pseudo-random vector seeded from the raw data so that the
+            inference pipeline can be exercised end-to-end.
         """
         base_values = df.values.astype(np.float64).flatten()
         rng = np.random.default_rng(seed=abs(hash(base_values.tobytes())) % (2**31))
