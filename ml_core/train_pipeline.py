@@ -6,24 +6,31 @@ End-to-end training script for TradePulse's Hybrid Ensemble.
 Pipeline stages
 ---------------
 1. **Mock data generation** — synthesises a DataFrame that simulates
-   thousands of raw technical indicators and sentiment scores plus an
-   OHLCV+sentiment time-series, so this script can be run and verified
-   without any live market data.
+   realistic OHLCV + sentiment time-series data with embedded technical
+   indicator signals, so this script can be run and verified without any
+   live market data.
 
-2. **Preprocessing** — fits ``FeaturePreprocessor`` on the tabular
-   features (RobustScaler → PCA at 95 % variance retention).
+2. **Technical feature engineering** — computes RSI, MACD, Bollinger
+   Bands, ATR, OBV, Stochastic, Williams %R, CCI, MFI and many more
+   indicators via ``TechnicalFeatureEngineer``, dramatically expanding
+   the feature set available to the tabular model.
 
-3. **Base-learner training with out-of-fold (OOF) predictions**:
-   a. ``XGBEngine`` — trained on the PCA-compressed tabular features.
-   b. ``LSTMModel`` — trained on the 3-D sequential OHLCV+sentiment
-      tensor.
+3. **Preprocessing** — fits ``FeaturePreprocessor`` on the enriched
+   tabular features (RobustScaler → PCA at 95 % variance retention).
+
+4. **Base-learner training with out-of-fold (OOF) predictions**:
+   a. ``XGBEngine`` — trained on the PCA-compressed tabular features
+      (now enriched with technical indicators).
+   b. ``LSTMModel`` — trained on the 3-D sequential OHLCV+indicator
+      tensor using a bidirectional LSTM with self-attention pooling.
    Both models produce OOF probability vectors using time-series
    cross-validation (``TimeSeriesSplit``) to avoid look-ahead bias.
 
-4. **Meta-learner training** — ``MetaLearner`` (Logistic Regression)
-   is fitted on the OOF probability matrix.
+5. **Meta-learner training** — ``MetaLearner`` (Logistic Regression)
+   is fitted on a richer OOF probability matrix that includes confidence
+   signals, disagreement, and interaction features.
 
-5. **Final evaluation** — the full ensemble is evaluated on a hold-out
+6. **Final evaluation** — the full ensemble is evaluated on a hold-out
    test set and key metrics are reported.
 
 Usage
@@ -42,6 +49,7 @@ import pandas as pd
 from sklearn.metrics import log_loss, roc_auc_score
 from sklearn.model_selection import TimeSeriesSplit
 
+from ml_core.feature_engineering import TechnicalFeatureEngineer
 from ml_core.lstm_engine import LSTMModel
 from ml_core.meta_learner import MetaLearner
 from ml_core.preprocessing import FeaturePreprocessor
@@ -64,9 +72,10 @@ logger = logging.getLogger(__name__)
 
 RANDOM_SEED: int = 42
 N_SAMPLES: int = 2000          # Total number of data points (days)
-N_RAW_FEATURES: int = 500      # Simulated raw technical + sentiment columns
 SEQ_LEN: int = 30              # Look-back window for the LSTM (days)
-OHLCV_FEATURES: int = 6        # OHLCV (5) + sentiment score (1)
+# OHLCV (5) + sentiment (1) + RSI (1) + MACD histogram (1) + BB %B (1)
+# + ATR normalised (1) + volume pressure (1) = 11 features per time step
+SEQ_FEATURES: int = 11
 TEST_SIZE: int = 200           # Hold-out test-set size
 N_CV_SPLITS: int = 5           # TimeSeriesSplit folds for OOF generation
 PCA_VARIANCE: float = 0.95     # Variance threshold for PCA
@@ -78,57 +87,106 @@ PCA_VARIANCE: float = 0.95     # Variance threshold for PCA
 
 def generate_mock_data(
     n_samples: int = N_SAMPLES,
-    n_features: int = N_RAW_FEATURES,
     seq_len: int = SEQ_LEN,
-    ohlcv_features: int = OHLCV_FEATURES,
+    seq_features: int = SEQ_FEATURES,
     random_state: int = RANDOM_SEED,
 ) -> tuple[pd.DataFrame, np.ndarray, np.ndarray]:
-    """Generate synthetic data mimicking the TradePulse feature set.
+    """Generate synthetic OHLCV + sentiment data and derive technical features.
+
+    The mock generator creates a realistic price walk, then derives OHLCV
+    columns from it.  ``TechnicalFeatureEngineer`` is used to compute
+    technical indicators directly from the OHLCV data — the same code path
+    that would run in production — so the training pipeline validates the
+    full feature-engineering stack.
 
     Returns
     -------
-    df_tabular : pd.DataFrame, shape (n_samples, n_features)
-        High-dimensional tabular features (raw technical indicators +
-        sentiment scores) before any preprocessing.
-    X_seq : np.ndarray, shape (n_samples, seq_len, ohlcv_features)
-        3-D sequential tensor for the LSTM: the last ``seq_len`` days of
-        OHLCV data and a sentiment score for each sample.
+    df_tabular : pd.DataFrame, shape (n_samples, n_technical_features)
+        Enriched tabular features (OHLCV + all technical indicators +
+        sentiment) ready for ``FeaturePreprocessor``.
+    X_seq : np.ndarray, shape (n_samples, seq_len, seq_features)
+        3-D sequential tensor for the LSTM containing OHLCV + selected
+        per-step technical indicators.
     y : np.ndarray, shape (n_samples,)
         Binary labels: 1 = price went UP, 0 = price went DOWN.
     """
     rng = np.random.default_rng(random_state)
 
-    # --- Tabular features --------------------------------------------------
-    feature_names = [f"feature_{i:04d}" for i in range(n_features)]
-    raw_data = rng.standard_normal((n_samples, n_features)).astype(np.float32)
-    # Introduce realistic sparsity / outliers
-    outlier_mask = rng.random((n_samples, n_features)) < 0.01
-    raw_data[outlier_mask] *= 10.0
-    df_tabular = pd.DataFrame(raw_data, columns=feature_names)
+    # ---- Simulate a price series -----------------------------------------
+    # Use a random walk with slight momentum / mean-reversion to give the
+    # model learnable structure beyond pure noise.
+    returns = rng.standard_normal(n_samples + seq_len + 50) * 0.01
+    # Add a small momentum component (AR(1) with φ=0.05)
+    for t in range(1, len(returns)):
+        returns[t] += 0.05 * returns[t - 1]
+    price = 100.0 * np.exp(np.cumsum(returns))
 
-    # --- Sequential tensor for LSTM ----------------------------------------
-    # Simulate OHLCV-like data: cumulative price walk + volume + sentiment
-    price = np.cumsum(rng.standard_normal((n_samples + seq_len, 1)), axis=0)
-    # Build overlapping windows of shape (n_samples, seq_len, 1)
-    price_windows = np.lib.stride_tricks.sliding_window_view(
-        price[:, 0], seq_len
-    )  # (n_samples, seq_len)
-    # Repeat for O/H/L/C/V (4 synthetic price channels + 1 volume + 1 sentiment)
-    price_windows = price_windows[:n_samples]
-    volume = rng.lognormal(mean=10, sigma=1, size=(n_samples, seq_len, 1))
-    sentiment = rng.uniform(-1, 1, size=(n_samples, seq_len, 1))
-    price_channels = np.stack(
-        [price_windows] * (ohlcv_features - 2), axis=-1
-    )  # (n_samples, seq_len, ohlcv_features-2)
-    X_seq = np.concatenate(
-        [price_channels, volume, sentiment], axis=-1
-    ).astype(np.float32)  # (n_samples, seq_len, ohlcv_features)
+    close = price[seq_len: seq_len + n_samples]
+    # Synthesise OHLC from close: realistic intraday spread
+    daily_vol = np.abs(rng.standard_normal(n_samples)) * 0.008 + 0.002
+    high = close * (1.0 + daily_vol)
+    low = close * (1.0 - daily_vol)
+    open_ = close * (1.0 + rng.standard_normal(n_samples) * 0.005)
+    volume = rng.lognormal(mean=10.0, sigma=0.8, size=n_samples) * (
+        1.0 + 0.3 * np.abs(returns[seq_len: seq_len + n_samples])
+    )
+    sentiment = rng.uniform(-1.0, 1.0, size=n_samples)
 
-    # --- Labels (binary) ---------------------------------------------------
-    # Use a simple future-return rule as a proxy for real labels
-    future_returns = np.diff(price[:, 0])[:n_samples]
-    y = (future_returns > 0).astype(np.float32)
+    # ---- Build OHLCV DataFrame and compute technical indicators ----------
+    df_raw = pd.DataFrame(
+        {
+            "open": open_,
+            "high": high,
+            "low": low,
+            "close": close,
+            "volume": volume,
+            "sentiment": sentiment,
+        }
+    )
 
+    engineer = TechnicalFeatureEngineer()
+    df_tabular = engineer.transform(df_raw, extra_cols=["sentiment"])
+
+    # ---- Sequential tensor for LSTM --------------------------------------
+    # Build overlapping windows of shape (n_samples, seq_len, seq_features).
+    # Features per time step: close, high, low, open, volume, sentiment,
+    # rsi_14, macd_hist, bb_pct_b, atr_14_norm, volume_pressure
+    seq_cols = (
+        [engineer.close_col, engineer.high_col, engineer.low_col,
+         engineer.open_col, engineer.volume_col, "sentiment"]
+        + ["rsi_14", "macd_hist", "bb_pct_b", "atr_14_norm", "volume_pressure"]
+    )
+    # Pad df_tabular to include historical rows for window construction
+    df_ext = pd.concat(
+        [
+            pd.DataFrame(
+                np.zeros((seq_len, df_tabular.shape[1])),
+                columns=df_tabular.columns,
+            ),
+            df_tabular,
+        ],
+        ignore_index=True,
+    )
+    seq_array = df_ext[seq_cols].values  # (n_samples + seq_len, seq_features)
+    # Build sliding windows
+    X_seq = np.stack(
+        [seq_array[i: i + seq_len] for i in range(n_samples)], axis=0
+    ).astype(np.float32)  # (n_samples, seq_len, seq_features)
+
+    # ---- Labels (binary) --------------------------------------------------
+    # 1 if close tomorrow is higher than close today
+    y = (np.diff(close, append=close[-1]) > 0).astype(np.float32)
+    # Fix the last label (no future data) — set to majority class
+    y[-1] = float(y[:-1].mean() >= 0.5)
+
+    logger.info(
+        "Mock data: %d samples | tabular shape: %s | seq shape: %s | "
+        "label balance: %.2f %%",
+        n_samples,
+        df_tabular.shape,
+        X_seq.shape,
+        100.0 * y.mean(),
+    )
     return df_tabular, X_seq, y
 
 
@@ -150,7 +208,7 @@ def generate_oof_predictions(
     Parameters
     ----------
     df_tabular : pd.DataFrame
-        Raw tabular feature matrix.
+        Enriched tabular feature matrix (OHLCV + technical indicators).
     X_seq : np.ndarray
         Sequential tensor for the LSTM.
     y : np.ndarray
@@ -189,21 +247,38 @@ def generate_oof_predictions(
         tab_val_pca = preprocessor.transform(tab_val)
         last_preprocessor = preprocessor
 
-        # ---- XGBoost ------------------------------------------------------
-        xgb = XGBEngine(random_state=RANDOM_SEED)
-        # Pass the explicit validation fold so no additional rows are carved
-        # out of the training split for early-stopping purposes.
+        # ---- XGBoost — improved engine with more hyperparameters ----------
+        xgb = XGBEngine(
+            max_depth=4,
+            n_estimators=500,
+            learning_rate=0.05,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            colsample_bylevel=0.8,
+            min_child_weight=5.0,
+            gamma=0.1,
+            reg_alpha=0.1,
+            reg_lambda=1.0,
+            random_state=RANDOM_SEED,
+        )
         xgb.fit(tab_train_pca, y_train_fold, tab_val_pca, y_val_fold)
         oof_xgb[val_idx] = xgb.predict_proba(tab_val_pca)
 
-        # ---- LSTM ---------------------------------------------------------
+        # ---- LSTM — bidirectional + attention, more features per step -----
         lstm = LSTMModel(
             input_size=seq_train.shape[2],
             seq_len=seq_train.shape[1],
             hidden_size=64,
-            num_layers=1,
-            epochs=10,          # Low epochs for mock demo; increase in production
+            num_layers=2,
+            dropout=0.3,
+            bidirectional=True,
+            n_attention_heads=4,
+            learning_rate=1e-3,
+            weight_decay=1e-4,
+            epochs=15,          # Keep low for mock demo; increase in production
             patience=5,
+            lr_scheduler_patience=3,
+            label_smoothing=0.05,
             random_state=RANDOM_SEED,
         )
         lstm.fit(seq_train, y_train_fold, seq_val, y_val_fold)
@@ -228,18 +303,10 @@ def run_training_pipeline() -> None:
     logger.info("=" * 60)
 
     # -----------------------------------------------------------------------
-    # 1. Generate mock data
+    # 1. Generate mock data (OHLCV → technical features → sequential tensor)
     # -----------------------------------------------------------------------
-    logger.info("Generating mock dataset …")
+    logger.info("Generating mock dataset with technical indicators …")
     df_tabular, X_seq, y = generate_mock_data()
-    logger.info(
-        "Dataset: %d samples | %d tabular features | "
-        "seq shape: %s | label balance: %.2f %%",
-        len(y),
-        df_tabular.shape[1],
-        X_seq.shape,
-        100 * y.mean(),
-    )
 
     # -----------------------------------------------------------------------
     # 2. Train/test split (time-aware — no shuffle)
@@ -283,7 +350,19 @@ def run_training_pipeline() -> None:
     )
 
     logger.info("Training final XGBEngine on full training split …")
-    xgb_final = XGBEngine(random_state=RANDOM_SEED)
+    xgb_final = XGBEngine(
+        max_depth=4,
+        n_estimators=500,
+        learning_rate=0.05,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        colsample_bylevel=0.8,
+        min_child_weight=5.0,
+        gamma=0.1,
+        reg_alpha=0.1,
+        reg_lambda=1.0,
+        random_state=RANDOM_SEED,
+    )
     xgb_final.fit(tab_train_pca, y_train)
 
     logger.info("Training final LSTMModel on full training split …")
@@ -291,9 +370,16 @@ def run_training_pipeline() -> None:
         input_size=X_seq_train.shape[2],
         seq_len=X_seq_train.shape[1],
         hidden_size=64,
-        num_layers=1,
-        epochs=10,
+        num_layers=2,
+        dropout=0.3,
+        bidirectional=True,
+        n_attention_heads=4,
+        learning_rate=1e-3,
+        weight_decay=1e-4,
+        epochs=15,
         patience=5,
+        lr_scheduler_patience=3,
+        label_smoothing=0.05,
         random_state=RANDOM_SEED,
     )
     lstm_final.fit(X_seq_train, y_train)
