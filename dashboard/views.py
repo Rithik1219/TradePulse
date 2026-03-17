@@ -4,6 +4,7 @@ import time
 
 from datetime import timedelta
 
+from django.core.cache import cache
 from django.db.models import FloatField, Sum
 from django.db.models.expressions import ExpressionWrapper, F
 from django.db.models.functions import TruncDate
@@ -12,6 +13,7 @@ from django.shortcuts import render
 from django.utils import timezone
 
 from dashboard.models import PortfolioSnapshot
+from news_pipeline.sentiment_prediction import run_local_news_prediction_pipeline
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +25,8 @@ _MARKET_OPEN_TIME = "09:15"
 _MARKET_CLOSE_TIME = "15:30"
 _ANGEL_ONE_REQUEST_DELAY = 0.5  # seconds — stay under 3 req/s rate limit
 _HISTORICAL_DAYS = 60  # days of OHLCV history to fetch per symbol
+_NEWS_PREDICTIONS_CACHE_KEY = "news_predictions_pipeline_v1"
+_NEWS_PREDICTIONS_CACHE_TIMEOUT_SECONDS = 20 * 60
 
 # ---------------------------------------------------------------------------
 # Sector mapping — maps NSE trading symbols to their market sector.
@@ -260,3 +264,40 @@ def portfolio_view(request):
         safe=False,
     )
 
+
+def news_predictions_view(request):
+    """Return local LLM news sentiment and prediction payload for the frontend."""
+    cached_payload = cache.get(_NEWS_PREDICTIONS_CACHE_KEY)
+    if cached_payload is not None:
+        response_data = dict(cached_payload)
+        response_data["cache"] = {
+            "hit": True,
+            "ttl_seconds": _NEWS_PREDICTIONS_CACHE_TIMEOUT_SECONDS,
+        }
+        return JsonResponse(response_data)
+
+    try:
+        payload = run_local_news_prediction_pipeline()
+    except Exception:
+        logger.exception("Failed to run local news prediction pipeline.")
+        return JsonResponse(
+            {
+                "error": (
+                    "Unable to generate local news predictions right now. "
+                    "Please retry in a moment."
+                )
+            },
+            status=503,
+        )
+
+    cache.set(
+        _NEWS_PREDICTIONS_CACHE_KEY,
+        payload,
+        timeout=_NEWS_PREDICTIONS_CACHE_TIMEOUT_SECONDS,
+    )
+    response_data = dict(payload)
+    response_data["cache"] = {
+        "hit": False,
+        "ttl_seconds": _NEWS_PREDICTIONS_CACHE_TIMEOUT_SECONDS,
+    }
+    return JsonResponse(response_data)

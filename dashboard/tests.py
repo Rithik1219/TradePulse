@@ -2,17 +2,19 @@ from unittest.mock import MagicMock, patch
 import json
 
 import pandas as pd
+from django.core.cache import cache
 from django.test import TestCase, RequestFactory
 from django.utils import timezone
 
 from dashboard.models import PortfolioSnapshot
-from dashboard.views import portfolio_view
+from dashboard.views import portfolio_view, news_predictions_view
 
 class PortfolioViewTests(TestCase):
     """Tests for the portfolio_view."""
 
     def setUp(self):
         self.factory = RequestFactory()
+
 
     @patch("dashboard.views.AngelOneClient", create=True)
     def test_portfolio_view_renders_with_data(self, mock_import):
@@ -80,6 +82,73 @@ class PortfolioViewTests(TestCase):
         for key in ("portfolio", "error_message", "chart_labels", "chart_values",
                     "sector_labels", "sector_values", "historical_charts_json"):
             self.assertIn(key, data)
+
+
+class NewsPredictionsViewTests(TestCase):
+    """Tests for the /api/news-predictions/ endpoint."""
+
+    def setUp(self):
+        self.factory = RequestFactory()
+        cache.clear()
+
+    def tearDown(self):
+        cache.clear()
+
+    @patch("dashboard.views.run_local_news_prediction_pipeline")
+    def test_news_predictions_response_shape(self, mock_pipeline):
+        mock_pipeline.return_value = {
+            "generated_at": "2026-01-01T00:00:00+00:00",
+            "tickers": ["RELIANCE.NS"],
+            "headlines": [],
+            "sentiment": {
+                "aggregate": {
+                    "bullish": 0.2,
+                    "bearish": 0.1,
+                    "neutral": 0.7,
+                    "headline_count": 0,
+                },
+                "per_headline": [],
+            },
+            "market_summary": "Neutral outlook.",
+            "meta": {"engine": "local_finbert_plus_mistral"},
+        }
+
+        response = news_predictions_view(self.factory.get("/api/news-predictions/"))
+        data = json.loads(response.content)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(data["cache"]["hit"])
+        self.assertIn("tickers", data)
+        self.assertIn("sentiment", data)
+        self.assertIn("market_summary", data)
+
+    @patch("dashboard.views.run_local_news_prediction_pipeline")
+    def test_news_predictions_uses_cache(self, mock_pipeline):
+        mock_pipeline.return_value = {
+            "generated_at": "2026-01-01T00:00:00+00:00",
+            "tickers": ["TCS.NS"],
+            "headlines": [],
+            "sentiment": {
+                "aggregate": {
+                    "bullish": 0.5,
+                    "bearish": 0.3,
+                    "neutral": 0.2,
+                    "headline_count": 0,
+                },
+                "per_headline": [],
+            },
+            "market_summary": "Summary.",
+            "meta": {"engine": "local_finbert_plus_mistral"},
+        }
+
+        first = news_predictions_view(self.factory.get("/api/news-predictions/"))
+        second = news_predictions_view(self.factory.get("/api/news-predictions/"))
+        first_data = json.loads(first.content)
+        second_data = json.loads(second.content)
+
+        self.assertFalse(first_data["cache"]["hit"])
+        self.assertTrue(second_data["cache"]["hit"])
+        self.assertEqual(mock_pipeline.call_count, 1)
 
 
 class PortfolioSnapshotModelTests(TestCase):
@@ -480,4 +549,3 @@ class GetHistoricalDataTests(TestCase):
         call_args = client.smart_api.getCandleData.call_args[0][0]
         self.assertEqual(call_args["exchange"], "NSE")
         self.assertEqual(call_args["interval"], "ONE_DAY")
-
