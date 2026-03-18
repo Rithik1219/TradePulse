@@ -83,6 +83,53 @@ class PortfolioViewTests(TestCase):
                     "sector_labels", "sector_values", "historical_charts_json"):
             self.assertIn(key, data)
 
+    def test_portfolio_view_skips_prediction_for_sparse_history(self):
+        """When hist_df has fewer than _MIN_PREDICTION_ROWS rows the view must
+        not call predict_signal (avoiding the noisy ValueError traceback) and
+        must fall back to the 'Analyzing...' signal instead."""
+        import numpy as np
+        from dashboard.views import _MIN_PREDICTION_ROWS
+
+        sample_df = pd.DataFrame([
+            {"symbol": "CEINSYS-EQ", "quantity": 1, "avg_price": 100.0, "source": "holdings"},
+        ])
+        # Return fewer rows than the minimum required for prediction.
+        sparse_hist_df = pd.DataFrame({
+            "timestamp": pd.date_range("2026-01-01", periods=5, freq="D"),
+            "open": np.ones(5) * 100.0,
+            "high": np.ones(5) * 110.0,
+            "low": np.ones(5) * 90.0,
+            "close": np.ones(5) * 105.0,
+            "volume": np.ones(5, dtype=int) * 1000,
+        })
+        self.assertLess(len(sparse_hist_df), _MIN_PREDICTION_ROWS)
+
+        mock_predictor = MagicMock()
+
+        with patch("dashboard.views._predictor", mock_predictor):
+            with patch.dict("sys.modules", {
+                "data_ingestion": MagicMock(),
+                "data_ingestion.angel_one_api": MagicMock(),
+            }):
+                with patch("dashboard.views.AngelOneClient", create=True) as MockClient:
+                    mock_client_instance = MagicMock()
+                    mock_client_instance.get_portfolio.return_value = sample_df
+                    mock_client_instance.get_historical_data.return_value = sparse_hist_df
+                    MockClient.return_value = mock_client_instance
+                    with patch.dict("sys.modules", {
+                        "data_ingestion.angel_one_api": MagicMock(AngelOneClient=MockClient),
+                    }):
+                        request = self.factory.get("/")
+                        response = portfolio_view(request)
+
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.content)
+        # predict_signal must NOT have been called because hist_df was too small.
+        mock_predictor.predict_signal.assert_not_called()
+        # The AI signal must fall back to the default "Analyzing..." value.
+        record = data["portfolio"][0]
+        self.assertEqual(record["ai_signal"], "Analyzing...")
+
 
 class NewsPredictionsViewTests(TestCase):
     """Tests for the /api/news-predictions/ endpoint."""

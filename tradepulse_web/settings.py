@@ -119,4 +119,7 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 
+# Default auto field type for models that do not define a primary key.
+DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
 CORS_ALLOW_ALL_ORIGINS = True

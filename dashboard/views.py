@@ -27,6 +27,11 @@ _ANGEL_ONE_REQUEST_DELAY = 0.5  # seconds — stay under 3 req/s rate limit
 _HISTORICAL_DAYS = 60  # days of OHLCV history to fetch per symbol
 _NEWS_PREDICTIONS_CACHE_KEY = "news_predictions_pipeline_v1"
 _NEWS_PREDICTIONS_CACHE_TIMEOUT_SECONDS = 20 * 60
+# Minimum raw OHLCV rows required before calling predict_signal.
+# After pct_change() (−1 row) and rolling(window=20) (−19 rows), at least
+# 20 rows are always dropped; the LSTM then needs seq_len (30) clean rows,
+# so the minimum is 20 + 30 = 50 raw rows.
+_MIN_PREDICTION_ROWS = 50
 
 # ---------------------------------------------------------------------------
 # Sector mapping — maps NSE trading symbols to their market sector.
@@ -155,7 +160,7 @@ def portfolio_view(request):
                         to_date=to_date,
                     )
                     time.sleep(_ANGEL_ONE_REQUEST_DELAY)
-                    if not hist_df.empty:
+                    if len(hist_df) >= _MIN_PREDICTION_ROWS:
                         prob = _predictor.predict_signal(
                             hist_df, sentiment_score=0.0
                         )
